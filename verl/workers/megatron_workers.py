@@ -86,7 +86,7 @@ class ActorRolloutRefWorker(MegatronWorker):
             mpu.initialize_model_parallel(
                 tensor_model_parallel_size=self.config.actor.megatron.tensor_model_parallel_size,
                 pipeline_model_parallel_size=self.config.actor.megatron.pipeline_model_parallel_size,
-                virtual_pipeline_model_parallel_size=None,
+                virtual_pipeline_model_parallel_size=self.config.actor.megatron.virtual_pipeline_model_parallel_size,
                 pipeline_model_parallel_split_rank=None,
                 use_sharp=False,
                 context_parallel_size=1,
@@ -455,7 +455,7 @@ class CriticWorker(MegatronWorker):
             mpu.initialize_model_parallel(
                 tensor_model_parallel_size=self.config.megatron.tensor_model_parallel_size,
                 pipeline_model_parallel_size=self.config.megatron.pipeline_model_parallel_size,
-                virtual_pipeline_model_parallel_size=None,
+                virtual_pipeline_model_parallel_size=self.config.megatron.virtual_pipeline_model_parallel_size,
                 pipeline_model_parallel_split_rank=None,
                 use_sharp=False,
                 context_parallel_size=1,
@@ -629,7 +629,7 @@ class RewardModelWorker(MegatronWorker):
             mpu.initialize_model_parallel(
                 tensor_model_parallel_size=self.config.megatron.tensor_model_parallel_size,
                 pipeline_model_parallel_size=self.config.megatron.pipeline_model_parallel_size,
-                virtual_pipeline_model_parallel_size=None,
+                virtual_pipeline_model_parallel_size=self.config.megatron.virtual_pipeline_model_parallel_size,
                 pipeline_model_parallel_split_rank=None,
                 use_sharp=False,
                 context_parallel_size=1,
