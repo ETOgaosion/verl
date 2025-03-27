@@ -24,8 +24,6 @@ import torch.distributed
 
 from verl.utils.fs import copy_to_local, is_non_local
 from verl.models.weight_loader_registry import get_weight_saver
-from verl.models.weight_loader_registry import get_weight_loader
-from verl.utils.model import load_megatron_model_weights
 from verl.utils.megatron_utils import TransformerConfig, get_model_checkpoint_path, get_hf_model_checkpoint_path, get_optimizer_checkpoint_path, get_rng_states_checkpoint_path
 
 from .checkpoint_manager import BaseCheckpointManager
@@ -86,7 +84,6 @@ class MegatronCheckpointManager(BaseCheckpointManager):
         self.rank = torch.distributed.get_rank()
 
         self.weight_saver = get_weight_saver(self.arch)
-        self.weight_loader = get_weight_loader(self.arch)
 
     def get_rng_state(self, use_dist_ckpt: bool = False, data_parallel_random_init: bool = False):
         """ collect rng state across data parallel ranks """
