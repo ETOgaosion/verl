@@ -1,0 +1,6 @@
+bash examples/grpo_trainer/run_qwen2_5-7b_math_megatron.sh
+bash examples/grpo_trainer/run_qwen2_5-7b_math.sh
+bash examples/grpo_trainer/run_deepseek7b_llm_math_megatron.sh
+bash examples/grpo_trainer/run_deepseek7b_llm_math.sh
+bash examples/grpo_trainer/run_qwen2-7b_math_megatron.sh
+bash examples/grpo_trainer/run_qwen2_5-7b_math.sh
