@@ -48,7 +48,7 @@ python3 -m verl.trainer.main_ppo --config-path=config \
     trainer.save_freq=50 \
     trainer.test_freq=5 \
     trainer.total_epochs=15 \
-    triner.total_training_steps=150 $@
+    trainer.total_training_steps=150 $@
 
 python3 -m verl.trainer.main_ppo --config-path=config \
     --config-name='ppo_megatron_trainer.yaml'\
