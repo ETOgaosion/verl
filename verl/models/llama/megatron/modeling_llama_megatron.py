@@ -204,6 +204,7 @@ class ParallelLlamaForCausalLM(nn.Module):
         )
 
         hidden_states = outputs
+        print(f'hidden_states = outputs, shape: {hidden_states.shape}')
         
         log_probs = None
         entropy = None
@@ -232,8 +233,11 @@ class ParallelLlamaForCausalLM(nn.Module):
             log_probs, entropy = linear_cross_entropy(hidden_states, self.lm_head.weights, labels, reduction="none")
         else:
             logits = self.lm_head(hidden_states)[0]
+            print(f'logits = self.lm_head(hidden_states)[0]: {logits.shape}')
             logits = tensor_parallel.gather_from_tensor_model_parallel_region(logits)
+            print(f'logits = tensor_parallel.gather_from_tensor_model_parallel_region(logits): {logits.shape}')
             logits = logits.float()
+            print(f'logits = logits.float()')
             
         return FusedCausalLMOutputWithPast(
             loss=None,
@@ -382,6 +386,7 @@ class ParallelLlamaForCausalLMRmPad(nn.Module):
                              max_seqlen_in_batch=max_seqlen_in_batch)
 
         hidden_states = outputs
+        print(f'hidden_states = outputs, shape: {hidden_states.shape}')
         
         log_probs = None
         entropy = None
@@ -419,16 +424,20 @@ class ParallelLlamaForCausalLMRmPad(nn.Module):
             entropy = pad_input(entropy, indices, batch_size, seqlen=sequence_length)
         else:
             logits = self._forward_head(hidden_states)
+            print(f'logits = self._forward_head(hidden_states), shape: {logits.shape}')
 
             # remove padding from sequence parallel
             if self.megatron_config.sequence_parallel:
                 totol_nnz = cu_seqlens[-1]
                 logits = logits[:totol_nnz]  # (total_nnz_padded)
+                print(f'logits = logits[:totol_nnz], shape: {logits.shape}')
 
             logits = torch.squeeze(logits, dim=1)  # remove the artificial batch dimension
+            print(f'logits = torch.squeeze(logits, dim=1), shape: {logits.shape}')
             # add removed padding back
             logits = pad_input(logits, indices, batch_size,
                         seqlen=sequence_length)  # (batch_size, sequence_length, vocab_size)
+            print(f'logits = pad_input(logits, indices, batch_size, seqlen=sequence_length), shape: {logits.shape}')
 
         return FusedCausalLMOutputWithPast(
             loss=None,
@@ -691,6 +700,7 @@ class ParallelLlamaForCausalLMRmPadPP(nn.Module):
 
         if self.post_process:
             hidden_states = outputs
+            print(f'hidden_states = outputs, shape: {hidden_states.shape}')
             
             log_probs = None
             entropy = None
@@ -728,16 +738,20 @@ class ParallelLlamaForCausalLMRmPadPP(nn.Module):
                 entropy = pad_input(entropy, indices, batch_size, seqlen=sequence_length)
             else:
                 logits = self._forward_head(hidden_states)
+                print(f'logits = self._forward_head(hidden_states), shape: {logits.shape}')
 
                 logits = torch.squeeze(logits, dim=1)  # remove the artificial batch dimension
+                print(f'logits = torch.squeeze(logits, dim=1), shape: {logits.shape}')
 
                 # remove padding from sequence parallel
                 if self.megatron_config.sequence_parallel:
                     totol_nnz = cu_seqlens[-1]
                     logits = logits[:totol_nnz]  # (total_nnz_padded)
+                    print(f'logits = logits[:totol_nnz], shape: {logits.shape}')
                 # add removed padding back
                 logits = pad_input(logits, indices, batch_size,
                                 seqlen=sequence_length)  # (batch_size, sequence_length, vocab_size)
+                print(f'logits = pad_input(logits, indices, batch_size, seqlen=sequence_length), shape: {logits.shape}')
 
             return FusedCausalLMOutputWithPast(
                 loss=None,
