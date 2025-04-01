@@ -1,0 +1,805 @@
++ export VLLM_ATTENTION_BACKEND=XFORMERS
++ VLLM_ATTENTION_BACKEND=XFORMERS
++ gsm8k_train_path=/home/tiger/data/gsm8k/train.parquet
++ gsm8k_test_path=/home/tiger/data/gsm8k/test.parquet
++ math_train_path=/home/tiger/data/math/train.parquet
++ math_test_path=/home/tiger/data/math/test.parquet
++ train_files='['\''/home/tiger/data/gsm8k/train.parquet'\'', '\''/home/tiger/data/math/train.parquet'\'']'
++ test_files='['\''/home/tiger/data/gsm8k/test.parquet'\'', '\''/home/tiger/data/math/test.parquet'\'']'
++ python3 -m verl.trainer.main_ppo --config-path=config --config-name=ppo_megatron_trainer.yaml algorithm.adv_estimator=grpo 'data.train_files=['\''/home/tiger/data/gsm8k/train.parquet'\'', '\''/home/tiger/data/math/train.parquet'\'']' 'data.val_files=['\''/home/tiger/data/gsm8k/test.parquet'\'', '\''/home/tiger/data/math/test.parquet'\'']' data.train_batch_size=1024 data.max_prompt_length=1024 data.max_response_length=1024 data.filter_overlong_prompts=True data.truncation=error actor_rollout_ref.model.path=Qwen/Qwen2.5-7B-Instruct actor_rollout_ref.actor.optim.lr=1e-6 actor_rollout_ref.actor.ppo_mini_batch_size=256 actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=2 actor_rollout_ref.actor.megatron.virtual_pipeline_model_parallel_size=2 actor_rollout_ref.actor.megatron.tensor_model_parallel_size=4 actor_rollout_ref.actor.use_kl_loss=True actor_rollout_ref.actor.kl_loss_coef=0.001 actor_rollout_ref.actor.kl_loss_type=low_var_kl actor_rollout_ref.actor.entropy_coeff=0 actor_rollout_ref.model.enable_gradient_checkpointing=True actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 actor_rollout_ref.rollout.tensor_model_parallel_size=2 actor_rollout_ref.rollout.name=vllm actor_rollout_ref.rollout.gpu_memory_utilization=0.6 actor_rollout_ref.rollout.n=5 actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 algorithm.kl_ctrl.kl_coef=0.001 trainer.critic_warmup=0 'trainer.logger=[console,wandb]' trainer.project_name=test_v0.0.3 trainer.experiment_name=qwen2_5_7b_gsm8k_math_megatron_saveload trainer.n_gpus_per_node=16 trainer.nnodes=1 trainer.save_freq=-1 trainer.test_freq=5 trainer.total_epochs=15
+2025-04-01 17:57:31,870	INFO worker.py:1843 -- Started a local Ray instance. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+[36m(TaskRunner pid=773110)[0m {'actor_rollout_ref': {'actor': {'checkpoint': {'contents': ['model',
+[36m(TaskRunner pid=773110)[0m                                                              'optimizer',
+[36m(TaskRunner pid=773110)[0m                                                              'extra']},
+[36m(TaskRunner pid=773110)[0m                                  'clip_ratio': 0.2,
+[36m(TaskRunner pid=773110)[0m                                  'entropy_coeff': 0,
+[36m(TaskRunner pid=773110)[0m                                  'kl_loss_coef': 0.001,
+[36m(TaskRunner pid=773110)[0m                                  'kl_loss_type': 'low_var_kl',
+[36m(TaskRunner pid=773110)[0m                                  'load_weight': True,
+[36m(TaskRunner pid=773110)[0m                                  'megatron': {'pipeline_model_parallel_size': 2,
+[36m(TaskRunner pid=773110)[0m                                               'seed': 1,
+[36m(TaskRunner pid=773110)[0m                                               'sequence_parallel': True,
+[36m(TaskRunner pid=773110)[0m                                               'tensor_model_parallel_size': 4,
+[36m(TaskRunner pid=773110)[0m                                               'use_distributed_optimizer': True,
+[36m(TaskRunner pid=773110)[0m                                               'virtual_pipeline_model_parallel_size': 2},
+[36m(TaskRunner pid=773110)[0m                                  'optim': {'clip_grad': 1.0,
+[36m(TaskRunner pid=773110)[0m                                            'lr': 1e-06,
+[36m(TaskRunner pid=773110)[0m                                            'lr_warmup_steps': -1,
+[36m(TaskRunner pid=773110)[0m                                            'lr_warmup_steps_ratio': 0.0,
+[36m(TaskRunner pid=773110)[0m                                            'min_lr_ratio': None,
+[36m(TaskRunner pid=773110)[0m                                            'total_training_steps': -1,
+[36m(TaskRunner pid=773110)[0m                                            'warmup_style': 'constant'},
+[36m(TaskRunner pid=773110)[0m                                  'ppo_epochs': 1,
+[36m(TaskRunner pid=773110)[0m                                  'ppo_micro_batch_size': None,
+[36m(TaskRunner pid=773110)[0m                                  'ppo_micro_batch_size_per_gpu': 4,
+[36m(TaskRunner pid=773110)[0m                                  'ppo_mini_batch_size': 256,
+[36m(TaskRunner pid=773110)[0m                                  'shuffle': True,
+[36m(TaskRunner pid=773110)[0m                                  'strategy': 'megatron',
+[36m(TaskRunner pid=773110)[0m                                  'use_dynamic_bsz': False,
+[36m(TaskRunner pid=773110)[0m                                  'use_kl_loss': True,
+[36m(TaskRunner pid=773110)[0m                                  'use_torch_compile': True},
+[36m(TaskRunner pid=773110)[0m                        'hybrid_engine': True,
+[36m(TaskRunner pid=773110)[0m                        'model': {'enable_gradient_checkpointing': True,
+[36m(TaskRunner pid=773110)[0m                                  'external_lib': None,
+[36m(TaskRunner pid=773110)[0m                                  'override_config': {},
+[36m(TaskRunner pid=773110)[0m                                  'path': 'Qwen/Qwen2.5-7B-Instruct'},
+[36m(TaskRunner pid=773110)[0m                        'ref': {'load_weight': True,
+[36m(TaskRunner pid=773110)[0m                                'log_prob_micro_batch_size': None,
+[36m(TaskRunner pid=773110)[0m                                'log_prob_micro_batch_size_per_gpu': 4,
+[36m(TaskRunner pid=773110)[0m                                'megatron': {'pipeline_model_parallel_size': 1,
+[36m(TaskRunner pid=773110)[0m                                             'seed': 1,
+[36m(TaskRunner pid=773110)[0m                                             'sequence_parallel': True,
+[36m(TaskRunner pid=773110)[0m                                             'tensor_model_parallel_size': 4,
+[36m(TaskRunner pid=773110)[0m                                             'use_distributed_optimizer': True,
+[36m(TaskRunner pid=773110)[0m                                             'virtual_pipeline_model_parallel_size': None},
+[36m(TaskRunner pid=773110)[0m                                'param_offload': False},
+[36m(TaskRunner pid=773110)[0m                        'rollout': {'disable_log_stats': True,
+[36m(TaskRunner pid=773110)[0m                                    'do_sample': True,
+[36m(TaskRunner pid=773110)[0m                                    'dtype': 'bfloat16',
+[36m(TaskRunner pid=773110)[0m                                    'enable_chunked_prefill': False,
+[36m(TaskRunner pid=773110)[0m                                    'enforce_eager': True,
+[36m(TaskRunner pid=773110)[0m                                    'free_cache_engine': True,
+[36m(TaskRunner pid=773110)[0m                                    'gpu_memory_utilization': 0.6,
+[36m(TaskRunner pid=773110)[0m                                    'ignore_eos': False,
+[36m(TaskRunner pid=773110)[0m                                    'layer_name_map': {'gate_proj_layer_name': 'gate_up',
+[36m(TaskRunner pid=773110)[0m                                                       'qkv_layer_name': 'qkv'},
+[36m(TaskRunner pid=773110)[0m                                    'load_format': 'dummy_megatron',
+[36m(TaskRunner pid=773110)[0m                                    'log_prob_micro_batch_size': None,
+[36m(TaskRunner pid=773110)[0m                                    'log_prob_micro_batch_size_per_gpu': 4,
+[36m(TaskRunner pid=773110)[0m                                    'max_model_len': None,
+[36m(TaskRunner pid=773110)[0m                                    'max_num_batched_tokens': 8192,
+[36m(TaskRunner pid=773110)[0m                                    'max_num_seqs': 1024,
+[36m(TaskRunner pid=773110)[0m                                    'n': 5,
+[36m(TaskRunner pid=773110)[0m                                    'name': 'vllm',
+[36m(TaskRunner pid=773110)[0m                                    'prompt_length': 1024,
+[36m(TaskRunner pid=773110)[0m                                    'response_length': 1024,
+[36m(TaskRunner pid=773110)[0m                                    'temperature': 1.0,
+[36m(TaskRunner pid=773110)[0m                                    'tensor_model_parallel_size': 2,
+[36m(TaskRunner pid=773110)[0m                                    'top_k': -1,
+[36m(TaskRunner pid=773110)[0m                                    'top_p': 1,
+[36m(TaskRunner pid=773110)[0m                                    'val_kwargs': {'do_sample': False,
+[36m(TaskRunner pid=773110)[0m                                                   'n': 1,
+[36m(TaskRunner pid=773110)[0m                                                   'temperature': 0,
+[36m(TaskRunner pid=773110)[0m                                                   'top_k': -1,
+[36m(TaskRunner pid=773110)[0m                                                   'top_p': 1.0}}},
+[36m(TaskRunner pid=773110)[0m  'algorithm': {'adv_estimator': 'grpo',
+[36m(TaskRunner pid=773110)[0m                'gamma': 1.0,
+[36m(TaskRunner pid=773110)[0m                'kl_ctrl': {'kl_coef': 0.001, 'type': 'fixed'},
+[36m(TaskRunner pid=773110)[0m                'kl_penalty': 'kl',
+[36m(TaskRunner pid=773110)[0m                'lam': 1.0},
+[36m(TaskRunner pid=773110)[0m  'critic': {'checkpoint': {'contents': ['model', 'optimizer', 'extra']},
+[36m(TaskRunner pid=773110)[0m             'cliprange_value': 0.5,
+[36m(TaskRunner pid=773110)[0m             'kl_ctrl': {'kl_coef': 0.001, 'type': 'fixed'},
+[36m(TaskRunner pid=773110)[0m             'load_weight': True,
+[36m(TaskRunner pid=773110)[0m             'megatron': {'pipeline_model_parallel_size': 1,
+[36m(TaskRunner pid=773110)[0m                          'seed': 1,
+[36m(TaskRunner pid=773110)[0m                          'sequence_parallel': True,
+[36m(TaskRunner pid=773110)[0m /usr/local/lib/python3.11/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(TaskRunner pid=773110)[0m No module named 'vllm._version'
+[36m(TaskRunner pid=773110)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(TaskRunner pid=773110)[0m DeprecationWarning: `ray.state.available_resources_per_node` is a private attribute and access will be removed in a future Ray version.
+[36m(pid=783315)[0m /usr/local/lib/python3.11/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=783315)[0m No module named 'vllm._version'
+[36m(pid=783315)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(pid=783612)[0m /usr/local/lib/python3.11/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=783612)[0m No module named 'vllm._version'
+[36m(pid=783612)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(pid=783614)[0m /usr/local/lib/python3.11/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=783614)[0m No module named 'vllm._version'
+[36m(pid=783614)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(TaskRunner pid=773110)[0m                          'tensor_model_parallel_size': 4,
+[36m(TaskRunner pid=773110)[0m                          'use_distributed_optimizer': True,
+[36m(TaskRunner pid=773110)[0m                          'virtual_pipeline_model_parallel_size': None},
+[36m(TaskRunner pid=773110)[0m             'model': {'enable_gradient_checkpointing': False,
+[36m(TaskRunner pid=773110)[0m                       'external_lib': None,
+[36m(TaskRunner pid=773110)[0m                       'override_config': {},
+[36m(TaskRunner pid=773110)[0m                       'path': '~/models/deepseek-llm-7b-chat',
+[36m(TaskRunner pid=773110)[0m                       'tokenizer_path': 'Qwen/Qwen2.5-7B-Instruct'},
+[36m(TaskRunner pid=773110)[0m             'optim': {'clip_grad': 1.0,
+[36m(TaskRunner pid=773110)[0m                       'lr': 1e-05,
+[36m(TaskRunner pid=773110)[0m                       'lr_warmup_steps_ratio': 0.0,
+[36m(TaskRunner pid=773110)[0m                       'min_lr_ratio': None,
+[36m(TaskRunner pid=773110)[0m                       'total_training_steps': -1,
+[36m(TaskRunner pid=773110)[0m                       'warmup_style': 'constant'},
+[36m(TaskRunner pid=773110)[0m             'ppo_epochs': 1,
+[36m(TaskRunner pid=773110)[0m             'ppo_micro_batch_size': None,
+[36m(TaskRunner pid=773110)[0m             'ppo_micro_batch_size_per_gpu': None,
+[36m(TaskRunner pid=773110)[0m             'ppo_mini_batch_size': 256,
+[36m(TaskRunner pid=773110)[0m             'shuffle': True,
+[36m(TaskRunner pid=773110)[0m             'strategy': 'megatron',
+[36m(TaskRunner pid=773110)[0m             'use_dynamic_bsz': False},
+[36m(TaskRunner pid=773110)[0m  'custom_reward_function': {'name': 'compute_score', 'path': None},
+[36m(TaskRunner pid=773110)[0m  'data': {'filter_overlong_prompts': True,
+[36m(TaskRunner pid=773110)[0m           'max_prompt_length': 1024,
+[36m(TaskRunner pid=773110)[0m           'max_response_length': 1024,
+[36m(TaskRunner pid=773110)[0m           'prompt_key': 'prompt',
+[36m(TaskRunner pid=773110)[0m           'return_raw_chat': False,
+[36m(TaskRunner pid=773110)[0m           'return_raw_input_ids': False,
+[36m(TaskRunner pid=773110)[0m           'shuffle': True,
+[36m(TaskRunner pid=773110)[0m           'tokenizer': None,
+[36m(TaskRunner pid=773110)[0m           'train_batch_size': 1024,
+[36m(TaskRunner pid=773110)[0m           'train_files': ['/home/tiger/data/gsm8k/train.parquet',
+[36m(TaskRunner pid=773110)[0m                           '/home/tiger/data/math/train.parquet'],
+[36m(TaskRunner pid=773110)[0m           'truncation': 'error',
+[36m(TaskRunner pid=773110)[0m           'val_batch_size': None,
+[36m(TaskRunner pid=773110)[0m           'val_files': ['/home/tiger/data/gsm8k/test.parquet',
+[36m(TaskRunner pid=773110)[0m                         '/home/tiger/data/math/test.parquet']},
+[36m(TaskRunner pid=773110)[0m  'reward_model': {'enable': False,
+[36m(TaskRunner pid=773110)[0m                   'load_weight': True,
+[36m(TaskRunner pid=773110)[0m                   'max_length': None,
+[36m(TaskRunner pid=773110)[0m                   'megatron': {'pipeline_model_parallel_size': 1,
+[36m(TaskRunner pid=773110)[0m                                'seed': 1,
+[36m(TaskRunner pid=773110)[0m                                'sequence_parallel': True,
+[36m(TaskRunner pid=773110)[0m                                'tensor_model_parallel_size': 4,
+[36m(TaskRunner pid=773110)[0m                                'use_distributed_optimizer': True,
+[36m(TaskRunner pid=773110)[0m                                'virtual_pipeline_model_parallel_size': None},
+[36m(TaskRunner pid=773110)[0m                   'micro_batch_size': None,
+[36m(TaskRunner pid=773110)[0m                   'micro_batch_size_per_gpu': None,
+[36m(TaskRunner pid=773110)[0m                   'model': {'external_lib': None,
+[36m(TaskRunner pid=773110)[0m                             'input_tokenizer': 'Qwen/Qwen2.5-7B-Instruct',
+[36m(TaskRunner pid=773110)[0m                             'path': '~/models/FsfairX-LLaMA3-RM-v0.1'},
+[36m(TaskRunner pid=773110)[0m                   'param_offload': False,
+[36m(TaskRunner pid=773110)[0m                   'strategy': 'megatron',
+[36m(TaskRunner pid=773110)[0m                   'use_dynamic_bsz': False},
+[36m(TaskRunner pid=773110)[0m  'trainer': {'balance_batch': True,
+[36m(TaskRunner pid=773110)[0m              'critic_warmup': 0,
+[36m(TaskRunner pid=773110)[0m              'default_hdfs_dir': None,
+[36m(TaskRunner pid=773110)[0m              'default_local_dir': 'checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload',
+[36m(TaskRunner pid=773110)[0m              'del_local_ckpt_after_load': False,
+[36m(TaskRunner pid=773110)[0m              'experiment_name': 'qwen2_5_7b_gsm8k_math_megatron_saveload',
+[36m(TaskRunner pid=773110)[0m              'log_val_generations': 0,
+[36m(TaskRunner pid=773110)[0m              'logger': ['console', 'wandb'],
+[36m(TaskRunner pid=773110)[0m              'max_actor_ckpt_to_keep': None,
+[36m(TaskRunner pid=773110)[0m              'max_critic_ckpt_to_keep': None,
+[36m(TaskRunner pid=773110)[0m              'n_gpus_per_node': 16,
+[36m(TaskRunner pid=773110)[0m              'nnodes': 1,
+[36m(TaskRunner pid=773110)[0m              'project_name': 'test_v0.0.3',
+[36m(TaskRunner pid=773110)[0m              'resume_from_path': None,
+[36m(TaskRunner pid=773110)[0m              'resume_mode': 'auto',
+[36m(TaskRunner pid=773110)[0m              'save_freq': -1,
+[36m(TaskRunner pid=773110)[0m              'test_freq': 5,
+[36m(TaskRunner pid=773110)[0m              'total_epochs': 15,
+[36m(TaskRunner pid=773110)[0m              'total_training_steps': None,
+[36m(TaskRunner pid=773110)[0m              'val_before_train': True}}
+[36m(TaskRunner pid=773110)[0m WARNING 04-01 17:57:44 cuda.py:22] You are using a deprecated `pynvml` package. Please install `nvidia-ml-py` instead, and make sure to uninstall `pynvml`. When both of them are installed, `pynvml` will take precedence and cause errors. See https://pypi.org/project/pynvml for more information.
+[36m(TaskRunner pid=773110)[0m [validate_config] All configuration checks passed successfully!
+[36m(TaskRunner pid=773110)[0m dataset len: 14973
+[36m(TaskRunner pid=773110)[0m filter dataset len: 14966
+[36m(TaskRunner pid=773110)[0m dataset len: 6319
+[36m(TaskRunner pid=773110)[0m filter dataset len: 6317
+[36m(TaskRunner pid=773110)[0m Size of train dataloader: 14
+[36m(TaskRunner pid=773110)[0m Total training steps: 210
+[36m(pid=783315)[0m WARNING 04-01 17:57:59 cuda.py:22] You are using a deprecated `pynvml` package. Please install `nvidia-ml-py` instead, and make sure to uninstall `pynvml`. When both of them are installed, `pynvml` will take precedence and cause errors. See https://pypi.org/project/pynvml for more information.
+[36m(pid=783612)[0m WARNING 04-01 17:59:38 cuda.py:22] You are using a deprecated `pynvml` package. Please install `nvidia-ml-py` instead, and make sure to uninstall `pynvml`. When both of them are installed, `pynvml` will take precedence and cause errors. See https://pypi.org/project/pynvml for more information.
+[36m(pid=783614)[0m WARNING 04-01 17:59:42 cuda.py:22] You are using a deprecated `pynvml` package. Please install `nvidia-ml-py` instead, and make sure to uninstall `pynvml`. When both of them are installed, `pynvml` will take precedence and cause errors. See https://pypi.org/project/pynvml for more information.
+[36m(pid=783613)[0m /usr/local/lib/python3.11/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 7x across cluster][0m
+[36m(pid=783613)[0m No module named 'vllm._version'[32m [repeated 7x across cluster][0m
+[36m(pid=783613)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=783623)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+[36m(pid=783618)[0m /usr/local/lib/python3.11/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 6x across cluster][0m
+[36m(pid=783618)[0m No module named 'vllm._version'[32m [repeated 6x across cluster][0m
+[36m(pid=783618)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 6x across cluster][0m
+[36m(pid=783613)[0m WARNING 04-01 17:59:48 cuda.py:22] You are using a deprecated `pynvml` package. Please install `nvidia-ml-py` instead, and make sure to uninstall `pynvml`. When both of them are installed, `pynvml` will take precedence and cause errors. See https://pypi.org/project/pynvml for more information.[32m [repeated 7x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(WorkerDict pid=783623)[0m self.config.ref.load_weight: True
+[36m(WorkerDict pid=783623)[0m after load model cls
+[36m(WorkerDict pid=783623)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)
+[36m(WorkerDict pid=783623)[0m pipeline_dtype=megatron_config torch.bfloat16
+[36m(WorkerDict pid=783623)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)
+[36m(WorkerDict pid=783623)[0m pipeline_dtype=megatron_config torch.bfloat16
+[36m(WorkerDict pid=783623)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)
+[36m(WorkerDict pid=783623)[0m pipeline_dtype=megatron_config torch.bfloat16
+[36m(pid=783618)[0m WARNING 04-01 17:59:51 cuda.py:22] You are using a deprecated `pynvml` package. Please install `nvidia-ml-py` instead, and make sure to uninstall `pynvml`. When both of them are installed, `pynvml` will take precedence and cause errors. See https://pypi.org/project/pynvml for more information.[32m [repeated 6x across cluster][0m
+[36m(WorkerDict pid=783623)[0m load ref weight start
+[36m(WorkerDict pid=783623)[0m load from local dir Qwen/Qwen2.5-7B-Instruct
+[36m(WorkerDict pid=783612)[0m  > number of parameters on (tensor, pipeline) model parallel rank (3, 0): 952026880
+[36m(WorkerDict pid=783315)[0m Model config after override: Qwen2Config {
+[36m(WorkerDict pid=783315)[0m   "_name_or_path": "Qwen/Qwen2.5-7B-Instruct",
+[36m(WorkerDict pid=783315)[0m   "architectures": [
+[36m(WorkerDict pid=783315)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783315)[0m   ],
+[36m(WorkerDict pid=783315)[0m   "attention_dropout": 0.0,
+[36m(WorkerDict pid=783315)[0m   "eos_token_id": 151645,
+[36m(WorkerDict pid=783315)[0m   "hidden_act": "silu",
+[36m(WorkerDict pid=783315)[0m   "hidden_size": 3584,
+[36m(WorkerDict pid=783315)[0m   "initializer_range": 0.02,
+[36m(WorkerDict pid=783315)[0m   "intermediate_size": 18944,
+[36m(WorkerDict pid=783315)[0m   "max_position_embeddings": 32768,
+[36m(WorkerDict pid=783315)[0m   "max_window_layers": 28,
+[36m(WorkerDict pid=783315)[0m   "model_type": "qwen2",
+[36m(WorkerDict pid=783315)[0m   "num_attention_heads": 28,
+[36m(WorkerDict pid=783315)[0m   "num_hidden_layers": 28,
+[36m(WorkerDict pid=783315)[0m   "num_key_value_heads": 4,
+[36m(WorkerDict pid=783315)[0m   "pad_token_id": 151643,
+[36m(WorkerDict pid=783315)[0m   "rms_norm_eps": 1e-06,
+[36m(WorkerDict pid=783315)[0m   "rope_scaling": null,
+[36m(WorkerDict pid=783315)[0m   "rope_theta": 1000000.0,
+[36m(WorkerDict pid=783315)[0m   "sliding_window": null,
+[36m(WorkerDict pid=783315)[0m   "tie_word_embeddings": false,
+[36m(WorkerDict pid=783623)[0m Loading checkpoint shards:  25%|██▌       | 1/4 [00:01<00:03,  1.13s/it]
+[36m(WorkerDict pid=783623)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.17s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.20s/it]
+[36m(WorkerDict pid=783315)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s][32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783315)[0m   "torch_dtype": "bfloat16",
+[36m(WorkerDict pid=783315)[0m   "transformers_version": "4.48.3",
+[36m(WorkerDict pid=783315)[0m   "use_cache": true,
+[36m(WorkerDict pid=783315)[0m   "use_sliding_window": false,
+[36m(WorkerDict pid=783315)[0m   "vocab_size": 152064
+[36m(WorkerDict pid=783315)[0m }
+[36m(WorkerDict pid=783315)[0m 
+[36m(WorkerDict pid=783623)[0m before weight loader: architectures = ['Qwen2ForCausalLM']...
+[36m(WorkerDict pid=783623)[0m call weight loader arch = Qwen2ForCausalLM, model config = Qwen2Config {
+[36m(WorkerDict pid=783623)[0m   "_attn_implementation_autoset": true,
+[36m(WorkerDict pid=783623)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783623)[0m   "bos_token_id": 151643,
+[36m(WorkerDict pid=783623)[0m 
+[36m(WorkerDict pid=783623)[0m 15 loading layer #7...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.7, layer_map[layer]: (1, 0, 0)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #8...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.8, layer_map[layer]: (1, 0, 1)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #9...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.9, layer_map[layer]: (1, 0, 2)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #10...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.10, layer_map[layer]: (1, 0, 3)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #11...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.11, layer_map[layer]: (1, 0, 4)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #12...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.12, layer_map[layer]: (1, 0, 5)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #13...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.13, layer_map[layer]: (1, 0, 6)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #21...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.21, layer_map[layer]: (1, 1, 0)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #22...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.22, layer_map[layer]: (1, 1, 1)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #23...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.23, layer_map[layer]: (1, 1, 2)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #24...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.24, layer_map[layer]: (1, 1, 3)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #25...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.25, layer_map[layer]: (1, 1, 4)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #26...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.26, layer_map[layer]: (1, 1, 5)
+[36m(WorkerDict pid=783623)[0m 15 loading layer #27...
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.27, layer_map[layer]: (1, 1, 6)
+[36m(WorkerDict pid=783315)[0m self.config.ref.load_weight: True[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783620)[0m after load model cls[32m [repeated 31x across cluster][0m
+[36m(WorkerDict pid=783620)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)[32m [repeated 285x across cluster][0m
+[36m(WorkerDict pid=783620)[0m pipeline_dtype=megatron_config torch.bfloat16[32m [repeated 285x across cluster][0m
+[36m(WorkerDict pid=783620)[0m load ref weight start[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783620)[0m load from local dir Qwen/Qwen2.5-7B-Instruct[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783620)[0m  > number of parameters on (tensor, pipeline) model parallel rank (2, 1): 952030464[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=783612)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783612)[0m 
+[36m(WorkerDict pid=783612)[0m   "_name_or_path": "Qwen/Qwen2.5-7B-Instruct",[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "architectures": [[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   ],[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "attention_dropout": 0.0,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "eos_token_id": 151645,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "hidden_act": "silu",[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "hidden_size": 3584,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "initializer_range": 0.02,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "intermediate_size": 18944,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "max_position_embeddings": 32768,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "max_window_layers": 28,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "model_type": "qwen2",[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "num_attention_heads": 28,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "num_hidden_layers": 28,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "num_key_value_heads": 4,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "rms_norm_eps": 1e-06,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "rope_scaling": null,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "rope_theta": 1000000.0,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "sliding_window": null,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "tie_word_embeddings": false,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "torch_dtype": "bfloat16",[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "transformers_version": "4.48.3",[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783621)[0m Loading checkpoint shards:  75%|███████▌  | 3/4 [00:04<00:01,  1.39s/it][32m [repeated 47x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "use_cache": true,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "use_sliding_window": false,[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   "vocab_size": 152064[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783612)[0m }[32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783618)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783618)[0m 
+[36m(WorkerDict pid=783616)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783616)[0m 
+[36m(WorkerDict pid=783617)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783617)[0m 
+[36m(WorkerDict pid=783614)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783614)[0m 
+[36m(WorkerDict pid=783611)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783611)[0m 
+[36m(WorkerDict pid=783615)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783615)[0m 
+[36m(WorkerDict pid=783624)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783624)[0m 
+[36m(WorkerDict pid=783620)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783620)[0m 
+[36m(WorkerDict pid=783619)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783619)[0m 
+[36m(WorkerDict pid=783613)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783613)[0m 
+[36m(WorkerDict pid=783610)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783610)[0m 
+[36m(WorkerDict pid=783315)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783315)[0m 
+[36m(WorkerDict pid=783315)[0m loading embeddings...
+[36m(WorkerDict pid=783315)[0m loading final layernorm...
+[36m(WorkerDict pid=783315)[0m loading lm_head...
+[36m(WorkerDict pid=783315)[0m NCCL version 2.20.5+cuda12.4
+[36m(WorkerDict pid=783622)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783622)[0m 
+[36m(WorkerDict pid=783621)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783621)[0m 
+[36m(WorkerDict pid=783315)[0m loading megatron ckpt done, time elapsed 3.2378957271575928s
+[36m(WorkerDict pid=783315)[0m TransformerConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=True, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=True, overlap_p2p_comm=True, batch_p2p_comm=False, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True, num_layers=28, num_layers_in_first_pipeline_stage=None, num_layers_in_last_pipeline_stage=None, account_for_embedding_in_pipeline_split=False, account_for_loss_in_pipeline_split=False, hidden_size=3584, num_attention_heads=28, attention_backend=<AttnBackend.auto: 5>, softmax_scale=None, num_query_groups=4, ffn_hidden_size=18944, kv_channels=128, hidden_dropout=0.1, attention_dropout=0.1, fp32_residual_connection=False, apply_residual_connection_post_layernorm=False, layernorm_epsilon=1e-05, layernorm_zero_centered_gamma=False, add_bias_linear=False, add_qkv_bias=False, gated_linear_unit=True, activation_func=<function silu at 0x7fa0c81bc220>, activation_func_fp8_input_store=False, num_moe_experts=None, rotary_interleaved=False, window_size=None, normalization='RMSNorm', qk_layernorm=False, test_mode=False, calculate_per_token_loss=False, multi_latent_attention=False, init_method=<function init_method_normal.<locals>.init_ at 0x7fa010524040>, output_layer_init_method=<function scaled_init_method_normal.<locals>.init_ at 0x7fa010503880>, init_method_std=0.02, apply_query_key_layer_scaling=False, attention_softmax_in_fp32=True, bias_activation_fusion=False, masked_softmax_fusion=True, persist_layer_norm=False, memory_efficient_layer_norm=False, bias_dropout_fusion=False, apply_rope_fusion=False, recompute_granularity=None, recompute_method=None, recompute_num_layers=None, distribute_saved_activations=None, fp8=None, fp8_margin=0, fp8_interval=1, fp8_amax_history_len=1, fp8_amax_compute_algo='most_recent', fp8_wgrad=True, fp8_dot_product_attention=False, fp8_multi_head_attention=False, tp_only_amax_red=False, moe_shared_expert_intermediate_size=None, moe_shared_expert_overlap=False, moe_layer_freq=1, moe_ffn_hidden_size=18944, moe_router_load_balancing_type='aux_loss', moe_router_topk=2, moe_router_topk_limited_devices=None, moe_router_num_groups=None, moe_router_group_topk=None, moe_router_pre_softmax=False, moe_router_topk_scaling_factor=None, moe_router_score_function='softmax', moe_router_enable_expert_bias=False, moe_router_bias_update_rate=0.001, moe_grouped_gemm=False, moe_use_legacy_grouped_gemm=False, moe_aux_loss_coeff=0, moe_z_loss_coeff=None, moe_input_jitter_eps=None, moe_token_dropping=False, moe_token_dispatcher_type='alltoall', moe_per_layer_logging=False, moe_expert_capacity_factor=None, moe_pad_expert_input_to_capacity=False, moe_token_drop_policy='probs', moe_layer_recompute=False, moe_permute_fusion=False, cp_comm_type=None, enable_cuda_graph=False, cuda_graph_use_single_mempool=False, cuda_graph_retain_backward_graph=False, cuda_graph_warmup_steps=3, external_cuda_graph=False, clone_scatter_output_in_embedding=True, disable_parameter_transpose_cache=False, config_logger_dir='', flash_decode=False, inference_rng_tracker=False)
+[36m(WorkerDict pid=783621)[0m before weight loader: architectures = ['Qwen2ForCausalLM']...[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783621)[0m call weight loader arch = Qwen2ForCausalLM, model config = Qwen2Config {[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "_attn_implementation_autoset": true,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "bos_token_id": 151643,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783621)[0m 11 loading layer #27...[32m [repeated 210x across cluster][0m
+[36m(WorkerDict pid=783621)[0m 11 offset: 21, num_layer_this_model: 7, layer_name: model.layers.27, layer_map[layer]: (1, 1, 6)[32m [repeated 210x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "_name_or_path": "Qwen/Qwen2.5-7B-Instruct",[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "architectures": [[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   ],[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "attention_dropout": 0.0,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "eos_token_id": 151645,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "hidden_act": "silu",[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "hidden_size": 3584,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "initializer_range": 0.02,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "intermediate_size": 18944,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:05<00:00,  1.34s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:05<00:00,  1.34s/it][32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783619)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+[36m(WorkerDict pid=783617)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+[36m(WorkerDict pid=783621)[0m   "max_position_embeddings": 32768,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "max_window_layers": 28,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "model_type": "qwen2",[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "num_attention_heads": 28,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "num_hidden_layers": 28,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "num_key_value_heads": 4,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "rms_norm_eps": 1e-06,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "rope_scaling": null,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "rope_theta": 1000000.0,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "sliding_window": null,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "tie_word_embeddings": false,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "torch_dtype": "bfloat16",[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "transformers_version": "4.48.3",[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "use_cache": true,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "use_sliding_window": false,[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m   "vocab_size": 152064[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m }[32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783614)[0m create pp model torch allocated 2.1391 GB, reserved 2.2754 GB
+[36m(WorkerDict pid=783614)[0m after load model cls
+[36m(WorkerDict pid=783614)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)
+[36m(WorkerDict pid=783614)[0m pipeline_dtype=megatron_config torch.bfloat16
+[36m(WorkerDict pid=783614)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)
+[36m(WorkerDict pid=783614)[0m pipeline_dtype=megatron_config torch.bfloat16
+[36m(WorkerDict pid=783614)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)
+[36m(WorkerDict pid=783614)[0m pipeline_dtype=megatron_config torch.bfloat16
+[36m(WorkerDict pid=783315)[0m Model config after override: Qwen2Config {
+[36m(WorkerDict pid=783315)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783315)[0m   "pad_token_id": 151643,
+[36m(WorkerDict pid=783315)[0m 
+[36m(WorkerDict pid=783619)[0m 
+[36m(WorkerDict pid=783612)[0m  > number of parameters on (tensor, pipeline) model parallel rank (3, 1): 952030464
+[36m(WorkerDict pid=783619)[0m NCCL version 2.20.5+cuda12.4
+[36m(WorkerDict pid=783619)[0m actor_module: 2
+[36m(WorkerDict pid=783619)[0m load from local dir Qwen/Qwen2.5-7B-Instruct
+[36m(WorkerDict pid=783619)[0m Loading checkpoint shards:  25%|██▌       | 1/4 [00:01<00:03,  1.24s/it]
+[36m(WorkerDict pid=783614)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.16s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.20s/it][32m [repeated 2x across cluster][0m
+[36m(WorkerDict pid=783618)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s][32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783621)[0m TransformerConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=True, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=True, overlap_p2p_comm=True, batch_p2p_comm=False, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True, num_layers=28, num_layers_in_first_pipeline_stage=None, num_layers_in_last_pipeline_stage=None, account_for_embedding_in_pipeline_split=False, account_for_loss_in_pipeline_split=False, hidden_size=3584, num_attention_heads=28, attention_backend=<AttnBackend.auto: 5>, softmax_scale=None, num_query_groups=4, ffn_hidden_size=18944, kv_channels=128, hidden_dropout=0.1, attention_dropout=0.1, fp32_residual_connection=False, apply_residual_connection_post_layernorm=False, layernorm_epsilon=1e-05, layernorm_zero_centered_gamma=False, add_bias_linear=False, add_qkv_bias=False, gated_linear_unit=True, activation_func=<function silu at 0x7fc8047c0220>, activation_func_fp8_input_store=False, num_moe_experts=None, rotary_interleaved=False, window_size=None, normalization='RMSNorm', qk_layernorm=False, test_mode=False, calculate_per_token_loss=False, multi_latent_attention=False, init_method=<function init_method_normal.<locals>.init_ at 0x7fc67426eac0>, output_layer_init_method=<function scaled_init_method_normal.<locals>.init_ at 0x7fc67426c7c0>, init_method_std=0.02, apply_query_key_layer_scaling=False, attention_softmax_in_fp32=True, bias_activation_fusion=False, masked_softmax_fusion=True, persist_layer_norm=False, memory_efficient_layer_norm=False, bias_dropout_fusion=False, apply_rope_fusion=False, recompute_granularity=None, recompute_method=None, recompute_num_layers=None, distribute_saved_activations=None, fp8=None, fp8_margin=0, fp8_interval=1, fp8_amax_history_len=1, fp8_amax_compute_algo='most_recent', fp8_wgrad=True, fp8_dot_product_attention=False, fp8_multi_head_attention=False, tp_only_amax_red=False, moe_shared_expert_intermediate_size=None, moe_shared_expert_overlap=False, moe_layer_freq=1, moe_ffn_hidden_size=18944, moe_router_load_balancing_type='aux_loss', moe_router_topk=2, moe_router_topk_limited_devices=None, moe_router_num_groups=None, moe_router_group_topk=None, moe_router_pre_softmax=False, moe_router_topk_scaling_factor=None, moe_router_score_function='softmax', moe_router_enable_expert_bias=False, moe_router_bias_update_rate=0.001, moe_grouped_gemm=False, moe_use_legacy_grouped_gemm=False, moe_aux_loss_coeff=0, moe_z_loss_coeff=None, moe_input_jitter_eps=None, moe_token_dropping=False, moe_token_dispatcher_type='alltoall', moe_per_layer_logging=False, moe_expert_capacity_factor=None, moe_pad_expert_input_to_capacity=False, moe_token_drop_policy='probs', moe_layer_recompute=False, moe_permute_fusion=False, cp_comm_type=None, enable_cuda_graph=False, cuda_graph_use_single_mempool=False, cuda_graph_retain_backward_graph=False, cuda_graph_warmup_steps=3, external_cuda_graph=False, clone_scatter_output_in_embedding=True, disable_parameter_transpose_cache=False, config_logger_dir='', flash_decode=False, inference_rng_tracker=False)[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783315)[0m   "_name_or_path": "Qwen/Qwen2.5-7B-Instruct",
+[36m(WorkerDict pid=783315)[0m   "architectures": [
+[36m(WorkerDict pid=783315)[0m   ],
+[36m(WorkerDict pid=783315)[0m   "attention_dropout": 0.0,
+[36m(WorkerDict pid=783315)[0m   "eos_token_id": 151645,
+[36m(WorkerDict pid=783315)[0m   "hidden_act": "silu",
+[36m(WorkerDict pid=783315)[0m   "hidden_size": 3584,
+[36m(WorkerDict pid=783315)[0m   "initializer_range": 0.02,
+[36m(WorkerDict pid=783315)[0m   "intermediate_size": 18944,
+[36m(WorkerDict pid=783315)[0m   "max_position_embeddings": 32768,
+[36m(WorkerDict pid=783315)[0m   "max_window_layers": 28,
+[36m(WorkerDict pid=783315)[0m   "model_type": "qwen2",
+[36m(WorkerDict pid=783315)[0m   "num_attention_heads": 28,
+[36m(WorkerDict pid=783315)[0m   "num_hidden_layers": 28,
+[36m(WorkerDict pid=783315)[0m   "num_key_value_heads": 4,
+[36m(WorkerDict pid=783315)[0m   "rms_norm_eps": 1e-06,
+[36m(WorkerDict pid=783315)[0m   "rope_scaling": null,
+[36m(WorkerDict pid=783315)[0m   "rope_theta": 1000000.0,
+[36m(WorkerDict pid=783315)[0m   "sliding_window": null,
+[36m(WorkerDict pid=783315)[0m   "tie_word_embeddings": false,
+[36m(WorkerDict pid=783315)[0m   "torch_dtype": "bfloat16",
+[36m(WorkerDict pid=783315)[0m   "transformers_version": "4.48.3",
+[36m(WorkerDict pid=783315)[0m   "use_cache": true,
+[36m(WorkerDict pid=783315)[0m   "use_sliding_window": false,
+[36m(WorkerDict pid=783315)[0m   "vocab_size": 152064
+[36m(WorkerDict pid=783315)[0m }
+[36m(WorkerDict pid=783617)[0m before weight loader: architectures = ['Qwen2ForCausalLM']...
+[36m(WorkerDict pid=783617)[0m call weight loader arch = Qwen2ForCausalLM, model config = Qwen2Config {
+[36m(WorkerDict pid=783617)[0m   "_attn_implementation_autoset": true,
+[36m(WorkerDict pid=783617)[0m   "_name_or_path": "Qwen/Qwen2.5-7B-Instruct",
+[36m(WorkerDict pid=783617)[0m   "architectures": [
+[36m(WorkerDict pid=783617)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783617)[0m   ],
+[36m(WorkerDict pid=783617)[0m   "attention_dropout": 0.0,
+[36m(WorkerDict pid=783617)[0m   "bos_token_id": 151643,
+[36m(WorkerDict pid=783617)[0m   "eos_token_id": 151645,
+[36m(WorkerDict pid=783617)[0m   "hidden_act": "silu",
+[36m(WorkerDict pid=783617)[0m   "hidden_size": 3584,
+[36m(WorkerDict pid=783617)[0m   "initializer_range": 0.02,
+[36m(WorkerDict pid=783617)[0m   "intermediate_size": 18944,
+[36m(WorkerDict pid=783617)[0m   "max_position_embeddings": 32768,
+[36m(WorkerDict pid=783617)[0m   "max_window_layers": 28,
+[36m(WorkerDict pid=783617)[0m   "model_type": "qwen2",
+[36m(WorkerDict pid=783617)[0m   "num_attention_heads": 28,
+[36m(WorkerDict pid=783617)[0m   "num_hidden_layers": 28,
+[36m(WorkerDict pid=783617)[0m   "num_key_value_heads": 4,
+[36m(WorkerDict pid=783617)[0m   "rms_norm_eps": 1e-06,
+[36m(WorkerDict pid=783617)[0m   "rope_scaling": null,
+[36m(WorkerDict pid=783617)[0m   "rope_theta": 1000000.0,
+[36m(WorkerDict pid=783617)[0m   "sliding_window": null,
+[36m(WorkerDict pid=783617)[0m   "tie_word_embeddings": false,
+[36m(WorkerDict pid=783617)[0m   "torch_dtype": "bfloat16",
+[36m(WorkerDict pid=783617)[0m   "transformers_version": "4.48.3",
+[36m(WorkerDict pid=783617)[0m   "use_cache": true,
+[36m(WorkerDict pid=783617)[0m   "use_sliding_window": false,
+[36m(WorkerDict pid=783617)[0m   "vocab_size": 152064
+[36m(WorkerDict pid=783617)[0m }
+[36m(WorkerDict pid=783617)[0m 
+[36m(WorkerDict pid=783617)[0m 13 loading layer #7...
+[36m(WorkerDict pid=783621)[0m Loading checkpoint shards:  75%|███████▌  | 3/4 [00:03<00:01,  1.31s/it][32m [repeated 47x across cluster][0m
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.7, layer_map[layer]: (1, 0, 0)
+[36m(WorkerDict pid=783618)[0m create pp model torch allocated 2.3740 GB, reserved 6.7046 GB[32m [repeated 31x across cluster][0m
+[36m(WorkerDict pid=783618)[0m after load model cls[32m [repeated 63x across cluster][0m
+[36m(WorkerDict pid=783618)[0m megatron config ModelParallelConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=False, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=False, overlap_p2p_comm=False, batch_p2p_comm=True, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True)[32m [repeated 573x across cluster][0m
+[36m(WorkerDict pid=783618)[0m pipeline_dtype=megatron_config torch.bfloat16[32m [repeated 573x across cluster][0m
+[36m(WorkerDict pid=783618)[0m  > number of parameters on (tensor, pipeline) model parallel rank (0, 1): 952030464[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783618)[0m NCCL version 2.20.5+cuda12.4[32m [repeated 6x across cluster][0m
+[36m(WorkerDict pid=783621)[0m actor_module: 2[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783621)[0m load from local dir Qwen/Qwen2.5-7B-Instruct[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783617)[0m 13 loading layer #8...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.8, layer_map[layer]: (1, 0, 1)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #9...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.9, layer_map[layer]: (1, 0, 2)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #10...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.10, layer_map[layer]: (1, 0, 3)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #11...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.11, layer_map[layer]: (1, 0, 4)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #12...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.12, layer_map[layer]: (1, 0, 5)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #13...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.13, layer_map[layer]: (1, 0, 6)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #21...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.21, layer_map[layer]: (1, 1, 0)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #22...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.22, layer_map[layer]: (1, 1, 1)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #23...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.23, layer_map[layer]: (1, 1, 2)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #24...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.24, layer_map[layer]: (1, 1, 3)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #25...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.25, layer_map[layer]: (1, 1, 4)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #26...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.26, layer_map[layer]: (1, 1, 5)
+[36m(WorkerDict pid=783617)[0m 13 loading layer #27...
+[36m(WorkerDict pid=783617)[0m 13 offset: 21, num_layer_this_model: 7, layer_name: model.layers.27, layer_map[layer]: (1, 1, 6)
+[36m(WorkerDict pid=783614)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783614)[0m 
+[36m(WorkerDict pid=783619)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783619)[0m 
+[36m(WorkerDict pid=783315)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783315)[0m 
+[36m(WorkerDict pid=783315)[0m loading embeddings...
+[36m(WorkerDict pid=783315)[0m loading final layernorm...
+[36m(WorkerDict pid=783315)[0m loading lm_head...
+[36m(WorkerDict pid=783616)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783616)[0m 
+[36m(WorkerDict pid=783613)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783613)[0m 
+[36m(WorkerDict pid=783610)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783610)[0m 
+[36m(WorkerDict pid=783611)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783611)[0m 
+[36m(WorkerDict pid=783612)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783612)[0m 
+[36m(WorkerDict pid=783620)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783620)[0m 
+[36m(WorkerDict pid=783615)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783615)[0m 
+[36m(WorkerDict pid=783624)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783624)[0m 
+[36m(WorkerDict pid=783618)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783618)[0m 
+[36m(WorkerDict pid=783622)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783622)[0m 
+[36m(WorkerDict pid=783621)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783621)[0m 
+[36m(WorkerDict pid=783623)[0m     "Qwen2ForCausalLM"
+[36m(WorkerDict pid=783623)[0m 
+[36m(WorkerDict pid=783315)[0m loading megatron ckpt done, time elapsed 1.6821174621582031s
+[36m(WorkerDict pid=783315)[0m DistributedDataParallel contains 544.14M parameters
+[36m(WorkerDict pid=783315)[0m TransformerConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=True, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=True, overlap_p2p_comm=True, batch_p2p_comm=False, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True, num_layers=28, num_layers_in_first_pipeline_stage=None, num_layers_in_last_pipeline_stage=None, account_for_embedding_in_pipeline_split=False, account_for_loss_in_pipeline_split=False, hidden_size=3584, num_attention_heads=28, attention_backend=<AttnBackend.auto: 5>, softmax_scale=None, num_query_groups=4, ffn_hidden_size=18944, kv_channels=128, hidden_dropout=0.1, attention_dropout=0.1, fp32_residual_connection=False, apply_residual_connection_post_layernorm=False, layernorm_epsilon=1e-05, layernorm_zero_centered_gamma=False, add_bias_linear=False, add_qkv_bias=False, gated_linear_unit=True, activation_func=<function silu at 0x7fa0c81bc220>, activation_func_fp8_input_store=False, num_moe_experts=None, rotary_interleaved=False, window_size=None, normalization='RMSNorm', qk_layernorm=False, test_mode=False, calculate_per_token_loss=False, multi_latent_attention=False, init_method=<function init_method_normal.<locals>.init_ at 0x7fa01016e200>, output_layer_init_method=<function scaled_init_method_normal.<locals>.init_ at 0x7fa01016e2a0>, init_method_std=0.02, apply_query_key_layer_scaling=False, attention_softmax_in_fp32=True, bias_activation_fusion=False, masked_softmax_fusion=True, persist_layer_norm=False, memory_efficient_layer_norm=False, bias_dropout_fusion=False, apply_rope_fusion=False, recompute_granularity=None, recompute_method=None, recompute_num_layers=None, distribute_saved_activations=None, fp8=None, fp8_margin=0, fp8_interval=1, fp8_amax_history_len=1, fp8_amax_compute_algo='most_recent', fp8_wgrad=True, fp8_dot_product_attention=False, fp8_multi_head_attention=False, tp_only_amax_red=False, moe_shared_expert_intermediate_size=None, moe_shared_expert_overlap=False, moe_layer_freq=1, moe_ffn_hidden_size=18944, moe_router_load_balancing_type='aux_loss', moe_router_topk=2, moe_router_topk_limited_devices=None, moe_router_num_groups=None, moe_router_group_topk=None, moe_router_pre_softmax=False, moe_router_topk_scaling_factor=None, moe_router_score_function='softmax', moe_router_enable_expert_bias=False, moe_router_bias_update_rate=0.001, moe_grouped_gemm=False, moe_use_legacy_grouped_gemm=False, moe_aux_loss_coeff=0, moe_z_loss_coeff=None, moe_input_jitter_eps=None, moe_token_dropping=False, moe_token_dispatcher_type='alltoall', moe_per_layer_logging=False, moe_expert_capacity_factor=None, moe_pad_expert_input_to_capacity=False, moe_token_drop_policy='probs', moe_layer_recompute=False, moe_permute_fusion=False, cp_comm_type=None, enable_cuda_graph=False, cuda_graph_use_single_mempool=False, cuda_graph_retain_backward_graph=False, cuda_graph_warmup_steps=3, external_cuda_graph=False, clone_scatter_output_in_embedding=True, disable_parameter_transpose_cache=False, config_logger_dir='', flash_decode=False, inference_rng_tracker=False)
+[36m(WorkerDict pid=783619)[0m WARNING 04-01 18:00:23 config.py:380] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used
+[36m(WorkerDict pid=783623)[0m before weight loader: architectures = ['Qwen2ForCausalLM']...[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m call weight loader arch = Qwen2ForCausalLM, model config = Qwen2Config {[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "_attn_implementation_autoset": true,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "_name_or_path": "Qwen/Qwen2.5-7B-Instruct",[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "architectures": [[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   ],[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "attention_dropout": 0.0,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "bos_token_id": 151643,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "eos_token_id": 151645,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "hidden_act": "silu",[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "hidden_size": 3584,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "initializer_range": 0.02,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "intermediate_size": 18944,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "max_position_embeddings": 32768,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "max_window_layers": 28,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "model_type": "qwen2",[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "num_attention_heads": 28,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "num_hidden_layers": 28,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "num_key_value_heads": 4,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "rms_norm_eps": 1e-06,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "rope_scaling": null,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "rope_theta": 1000000.0,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "sliding_window": null,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "tie_word_embeddings": false,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "torch_dtype": "bfloat16",[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "transformers_version": "4.48.3",[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "use_cache": true,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "use_sliding_window": false,[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m   "vocab_size": 152064[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m }[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m 15 loading layer #27...[32m [repeated 210x across cluster][0m
+[36m(WorkerDict pid=783623)[0m 15 offset: 21, num_layer_this_model: 7, layer_name: model.layers.27, layer_map[layer]: (1, 1, 6)[32m [repeated 210x across cluster][0m
+[36m(WorkerDict pid=783617)[0m NCCL version 2.20.5+cuda12.4[32m [repeated 6x across cluster][0m
+[36m(WorkerDict pid=783619)[0m /usr/local/lib/python3.11/dist-packages/xformers/ops/fmha/flash.py:211: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+[36m(WorkerDict pid=783619)[0m   @torch.library.impl_abstract("xformers_flash::flash_fwd")
+[36m(WorkerDict pid=783621)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:05<00:00,  1.23s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:05<00:00,  1.27s/it][32m [repeated 14x across cluster][0m
+[36m(WorkerDict pid=783619)[0m /usr/local/lib/python3.11/dist-packages/xformers/ops/fmha/flash.py:344: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+[36m(WorkerDict pid=783619)[0m   @torch.library.impl_abstract("xformers_flash::flash_bwd")
+[36m(TaskRunner pid=773110)[0m wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+[36m(WorkerDict pid=783315)[0m /usr/local/lib/python3.11/dist-packages/xformers/ops/fmha/flash.py:344: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.[32m [repeated 30x across cluster][0m
+[36m(WorkerDict pid=783315)[0m   @torch.library.impl_abstract("xformers_flash::flash_fwd")[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783315)[0m   @torch.library.impl_abstract("xformers_flash::flash_bwd")[32m [repeated 15x across cluster][0m
+[36m(TaskRunner pid=773110)[0m wandb: Currently logged in as: gaoziyuan-955 (gaoziyuan-955-bytedance) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+[36m(TaskRunner pid=773110)[0m wandb: creating run
+[36m(TaskRunner pid=773110)[0m wandb: Tracking run with wandb version 0.19.8
+[36m(TaskRunner pid=773110)[0m wandb: Run data is saved locally in /opt/tiger/verl/wandb/run-20250401_180035-l8levnyd
+[36m(TaskRunner pid=773110)[0m wandb: Run `wandb offline` to turn off syncing.
+[36m(TaskRunner pid=773110)[0m wandb: Syncing run qwen2_5_7b_gsm8k_math_megatron_saveload
+[36m(TaskRunner pid=773110)[0m wandb: ⭐️ View project at https://wandb.ai/gaoziyuan-955-bytedance/test_v0.0.3
+[36m(TaskRunner pid=773110)[0m wandb: 🚀 View run at https://wandb.ai/gaoziyuan-955-bytedance/test_v0.0.3/runs/l8levnyd
+[36m(WorkerDict pid=783315)[0m /opt/tiger/verl/verl/utils/checkpoint/megatron_checkpoint_manager.py:194: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+[36m(WorkerDict pid=783315)[0m   state_dicts = torch.load(os.path.join(ckpt_name))
+[36m(WorkerDict pid=783619)[0m   state_dict = torch.load(filename)
+[36m(WorkerDict pid=783623)[0m   rng_state = torch.load(rng_state_path)
+[36m(WorkerDict pid=783623)[0m /opt/tiger/verl/verl/utils/checkpoint/megatron_checkpoint_manager.py:171: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.[32m [repeated 24x across cluster][0m
+[36m(WorkerDict pid=783618)[0m   state_dicts = torch.load(os.path.join(ckpt_name))[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783612)[0m   state_dict = torch.load(filename)[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=783621)[0m TransformerConfig(tensor_model_parallel_size=4, pipeline_model_parallel_size=2, virtual_pipeline_model_parallel_size=2, sequence_parallel=True, context_parallel_size=1, hierarchical_context_parallel_sizes=None, expert_model_parallel_size=1, expert_tensor_parallel_size=4, moe_extended_tp=False, perform_initialization=True, use_cpu_initialization=True, fp16=False, bf16=True, params_dtype=torch.bfloat16, timers=None, finalize_model_grads_func=None, grad_scale_func=None, no_sync_func=None, grad_sync_func=None, param_sync_func=None, deterministic_mode=False, enable_autocast=False, autocast_dtype=torch.bfloat16, num_microbatches_with_partial_activation_checkpoints=None, gradient_accumulation_fusion=False, async_tensor_model_parallel_allreduce=False, use_te_rng_tracker=False, tp_comm_overlap=False, tp_comm_bulk_wgrad=True, tp_comm_bulk_dgrad=True, tp_comm_overlap_ag=True, tp_comm_overlap_rs=True, tp_comm_overlap_rs_dgrad=False, tp_comm_split_ag=True, tp_comm_atomic_ag=False, tp_comm_split_rs=True, tp_comm_atomic_rs=False, cross_entropy_loss_fusion=False, tp_comm_overlap_disable_qkv=False, tp_comm_overlap_disable_fc1=False, tp_comm_bootstrap_backend='nccl', pipeline_dtype=torch.bfloat16, variable_seq_lengths=True, overlap_p2p_comm=True, batch_p2p_comm=False, batch_p2p_sync=True, use_ring_exchange_p2p=False, deallocate_pipeline_outputs=False, defer_embedding_wgrad_compute=False, wgrad_deferral_limit=0, pipeline_model_parallel_split_rank=None, overlap_p2p_comm_warmup_flush=False, microbatch_group_size_per_vp_stage=2, cpu_offloading=False, cpu_offloading_num_layers=0, _cpu_offloading_context=None, cpu_offloading_activations=True, cpu_offloading_weights=True, barrier_with_L1_time=True, num_layers=28, num_layers_in_first_pipeline_stage=None, num_layers_in_last_pipeline_stage=None, account_for_embedding_in_pipeline_split=False, account_for_loss_in_pipeline_split=False, hidden_size=3584, num_attention_heads=28, attention_backend=<AttnBackend.auto: 5>, softmax_scale=None, num_query_groups=4, ffn_hidden_size=18944, kv_channels=128, hidden_dropout=0.1, attention_dropout=0.1, fp32_residual_connection=False, apply_residual_connection_post_layernorm=False, layernorm_epsilon=1e-05, layernorm_zero_centered_gamma=False, add_bias_linear=False, add_qkv_bias=False, gated_linear_unit=True, activation_func=<function silu at 0x7fc8047c0220>, activation_func_fp8_input_store=False, num_moe_experts=None, rotary_interleaved=False, window_size=None, normalization='RMSNorm', qk_layernorm=False, test_mode=False, calculate_per_token_loss=False, multi_latent_attention=False, init_method=<function init_method_normal.<locals>.init_ at 0x7fc65849d620>, output_layer_init_method=<function scaled_init_method_normal.<locals>.init_ at 0x7fc65849d6c0>, init_method_std=0.02, apply_query_key_layer_scaling=False, attention_softmax_in_fp32=True, bias_activation_fusion=False, masked_softmax_fusion=True, persist_layer_norm=False, memory_efficient_layer_norm=False, bias_dropout_fusion=False, apply_rope_fusion=False, recompute_granularity=None, recompute_method=None, recompute_num_layers=None, distribute_saved_activations=None, fp8=None, fp8_margin=0, fp8_interval=1, fp8_amax_history_len=1, fp8_amax_compute_algo='most_recent', fp8_wgrad=True, fp8_dot_product_attention=False, fp8_multi_head_attention=False, tp_only_amax_red=False, moe_shared_expert_intermediate_size=None, moe_shared_expert_overlap=False, moe_layer_freq=1, moe_ffn_hidden_size=18944, moe_router_load_balancing_type='aux_loss', moe_router_topk=2, moe_router_topk_limited_devices=None, moe_router_num_groups=None, moe_router_group_topk=None, moe_router_pre_softmax=False, moe_router_topk_scaling_factor=None, moe_router_score_function='softmax', moe_router_enable_expert_bias=False, moe_router_bias_update_rate=0.001, moe_grouped_gemm=False, moe_use_legacy_grouped_gemm=False, moe_aux_loss_coeff=0, moe_z_loss_coeff=None, moe_input_jitter_eps=None, moe_token_dropping=False, moe_token_dispatcher_type='alltoall', moe_per_layer_logging=False, moe_expert_capacity_factor=None, moe_pad_expert_input_to_capacity=False, moe_token_drop_policy='probs', moe_layer_recompute=False, moe_permute_fusion=False, cp_comm_type=None, enable_cuda_graph=False, cuda_graph_use_single_mempool=False, cuda_graph_retain_backward_graph=False, cuda_graph_warmup_steps=3, external_cuda_graph=False, clone_scatter_output_in_embedding=True, disable_parameter_transpose_cache=False, config_logger_dir='', flash_decode=False, inference_rng_tracker=False)[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783619)[0m local rank 0
+[36m(WorkerDict pid=783315)[0m before init cache memory allocated: 19.788304384GB, reserved: 20.136853504GB
+[36m(WorkerDict pid=783315)[0m after init cache memory allocated: 34.52708864GB, reserved: 34.87563776GB
+[36m(WorkerDict pid=783315)[0m WARNING 04-01 18:00:24 config.py:380] To see benefits of async output processing, enable CUDA graph. Since, enforce-eager is enabled, async output processor cannot be used[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783315)[0m local rank 0[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783619)[0m kwargs: {'n': 5, 'logprobs': 0, 'max_tokens': 1024, 'detokenize': False, 'temperature': 1.0, 'top_k': -1, 'top_p': 1, 'ignore_eos': False}
+[36m(TaskRunner pid=773110)[0m Using LocalLogger is deprecated. The constructor API will change 
+[36m(TaskRunner pid=773110)[0m Found checkpoint: %s /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50
+[36m(TaskRunner pid=773110)[0m Load from checkpoint folder: /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50
+[36m(TaskRunner pid=773110)[0m Setting global step to 50
+[36m(TaskRunner pid=773110)[0m Resuming from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50
+[36m(WorkerDict pid=783619)[0m Loaded sharded model checkpoint from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50/actor/model
+[36m(WorkerDict pid=783619)[0m Loading optimizer from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50/actor/optim/distrib_optim_pp1_tp1.pt
+[36m(WorkerDict pid=783617)[0m kwargs: {'n': 5, 'logprobs': 0, 'max_tokens': 1024, 'detokenize': False, 'temperature': 1.0, 'top_k': -1, 'top_p': 1, 'ignore_eos': False}[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783623)[0m Loading rng states from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50/actor/rng_states/rng_states.pt
+[36m(WorkerDict pid=783613)[0m Loaded sharded model checkpoint from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50/actor/model[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783613)[0m Loading optimizer from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50/actor/optim/distrib_optim_pp0_tp0.pt[32m [repeated 15x across cluster][0m
+[36m(TaskRunner pid=773110)[0m test_gen_batch meta info: {'eos_token_id': 151645, 'pad_token_id': 151643, 'recompute_log_prob': False, 'do_sample': False, 'validate': True}
+[36m(WorkerDict pid=783620)[0m Loading rng states from /opt/tiger/verl/checkpoints/test_v0.0.3/qwen2_5_7b_gsm8k_math_megatron_saveload/global_step_50/actor/rng_states/rng_states.pt[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783624)[0m NCCL version 2.20.5+cuda12.4
+[36m(TaskRunner pid=773110)[0m validation generation end
+[36m(TaskRunner pid=773110)[0m [prompt] system
+[36m(TaskRunner pid=773110)[0m You are Qwen, created by Alibaba Cloud. You are a helpful assistant.
+[36m(TaskRunner pid=773110)[0m user
+[36m(TaskRunner pid=773110)[0m Training Progress:  24%|██▍       | 50/210 [00:00<?, ?it/s]
+[36m(WorkerDict pid=783620)[0m   rng_state = torch.load(rng_state_path)[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783620)[0m /opt/tiger/verl/verl/utils/checkpoint/megatron_checkpoint_manager.py:171: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783315)[0m /opt/tiger/Megatron-LM/megatron/core/tensor_parallel/layers.py:653: UserWarning: When using sequence parallelism it is recommended to set the environment variable CUDA_DEVICE_MAX_CONNECTIONS to 1 for maximum speedup
+[36m(WorkerDict pid=783315)[0m   warnings.warn(
+[36m(TaskRunner pid=773110)[0m Training Progress:  24%|██▍       | 51/210 [06:28<17:08:33, 388.14s/it]
+[36m(WorkerDict pid=783624)[0m /opt/tiger/Megatron-LM/megatron/core/tensor_parallel/layers.py:653: UserWarning: When using sequence parallelism it is recommended to set the environment variable CUDA_DEVICE_MAX_CONNECTIONS to 1 for maximum speedup[32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=783624)[0m   warnings.warn([32m [repeated 15x across cluster][0m
+[36m(TaskRunner pid=773110)[0m Training Progress:  25%|██▍       | 52/210 [12:41<16:39:09, 379.43s/it]
+[36m(TaskRunner pid=773110)[0m Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market? Let's think step by step and output the final answer after "####".
+[36m(TaskRunner pid=773110)[0m assistant
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m [response] Let's break down the problem step by step:
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 1. **Calculate the total number of eggs laid per day:**
+[36m(TaskRunner pid=773110)[0m    Janet's ducks lay 16 eggs per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 2. **Calculate the total number of eggs used for breakfast:**
+[36m(TaskRunner pid=773110)[0m    Janet eats 3 eggs for breakfast every morning.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 3. **Calculate the total number of eggs used for baking muffins:**
+[36m(TaskRunner pid=773110)[0m    Janet bakes muffins for her friends with 4 eggs every day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 4. **Calculate the total number of eggs used daily:**
+[36m(TaskRunner pid=773110)[0m    Eggs used for breakfast + Eggs used for baking = 3 + 4 = 7 eggs per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 5. **Calculate the number of eggs remaining to be sold:**
+[36m(TaskRunner pid=773110)[0m    Total eggs laid - Eggs used = 16 - 7 = 9 eggs per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 6. **Calculate the total amount of money made from selling the remaining eggs:**
+[36m(TaskRunner pid=773110)[0m    Janet sells the remaining 9 eggs at $2 per egg.
+[36m(TaskRunner pid=773110)[0m    Therefore, the total amount of money made = 9 eggs * $2/egg = $18 per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m #### 18
+[36m(TaskRunner pid=773110)[0m [ground_truth] 18
+[36m(TaskRunner pid=773110)[0m [score] 1.0
+[36m(TaskRunner pid=773110)[0m [prompt] system
+[36m(TaskRunner pid=773110)[0m You are Qwen, created by Alibaba Cloud. You are a helpful assistant.
+[36m(TaskRunner pid=773110)[0m user
+[36m(TaskRunner pid=773110)[0m How many vertical asymptotes does the graph of $y=\frac{2}{x^2+x-6}$ have? Let's think step by step and output the final answer within \boxed{}.
+[36m(TaskRunner pid=773110)[0m assistant
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m [response] To determine the number of vertical asymptotes for the function \( y = \frac{2}{x^2 + x - 6} \), we need to identify the values of \( x \) that make the denominator zero, as these are the points where the function is undefined and potentially has vertical asymptotes.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m First, we factor the denominator:
+[36m(TaskRunner pid=773110)[0m \[ x^2 + x - 6 = (x + 3)(x - 2). \]
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m The denominator is zero when either \( x + 3 = 0 \) or \( x - 2 = 0 \). Solving these equations gives us:
+[36m(TaskRunner pid=773110)[0m \[ x = -3 \quad \text{and} \quad x = 2. \]
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m These are the points where the function is undefined. To confirm that these points are vertical asymptotes, we need to check that the numerator does not also become zero at these points. The numerator is a constant, 2, which is never zero. Therefore, the function has vertical asymptotes at \( x = -3 \) and \( x = 2 \).
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m Thus, the function \( y = \frac{2}{x^2 + x - 6} \) has two vertical asymptotes.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m The final answer is:
+[36m(TaskRunner pid=773110)[0m \[ \boxed{2} \]
+[36m(TaskRunner pid=773110)[0m [ground_truth] 2
+[36m(TaskRunner pid=773110)[0m [score] 1.0
+[36m(TaskRunner pid=773110)[0m ("Initial validation metrics: {'val/test_score/openai/gsm8k': "
+[36m(TaskRunner pid=773110)[0m  "0.9257012888551933, 'val/test_score/DigitalLearningGmbH/MATH-lighteval': "
+[36m(TaskRunner pid=773110)[0m  '0.7152861144457783}')
+[36m(TaskRunner pid=773110)[0m step:50 - val/test_score/openai/gsm8k:0.926 - val/test_score/DigitalLearningGmbH/MATH-lighteval:0.715
+[36m(TaskRunner pid=773110)[0m step:51 - global_seqlen/min:141923.000 - global_seqlen/max:172346.000 - global_seqlen/minmax_diff:30423.000 - global_seqlen/balanced_min:153989.000 - global_seqlen/balanced_max:153990.000 - global_seqlen/mean:153989.875 - actor/entropy_loss:0.048 - actor/pg_loss:0.010 - actor/pg_clipfrac:0.001 - actor/ppo_kl:0.000 - actor/kl_loss:0.026 - actor/kl_coef:0.001 - perf/mfu/actor:0.333 - critic/score/mean:0.838 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.838 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.008 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.008 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:369.007 - response_length/max:1024.000 - response_length/min:75.000 - response_length/clip_ratio:0.024 - prompt_length/mean:112.211 - prompt_length/max:817.000 - prompt_length/min:53.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:64.016 - timing_s/old_log_prob:70.732 - timing_s/ref:66.941 - timing_s/adv:1.142 - timing_s/update_actor:183.912 - timing_s/step:387.208 - timing_per_token_ms/gen:0.034 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.027 - perf/total_num_tokens:2463838.000 - perf/time_per_step:387.208 - perf/throughput:397.693
+[36m(TaskRunner pid=773110)[0m step:52 - global_seqlen/min:139533.000 - global_seqlen/max:160005.000 - global_seqlen/minmax_diff:20472.000 - global_seqlen/balanced_min:147998.000 - global_seqlen/balanced_max:147999.000 - global_seqlen/mean:147998.438 - actor/entropy_loss:0.045 - actor/pg_loss:0.006 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.028 - actor/kl_coef:0.001 - perf/mfu/actor:0.332 - critic/score/mean:0.876 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.876 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.006 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.006 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:349.979 - response_length/max:1024.000 - response_length/min:87.000 - response_length/clip_ratio:0.014 - prompt_length/mean:112.517 - prompt_length/max:863.000 - prompt_length/min:53.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:61.102 - timing_s/old_log_prob:68.179 - timing_s/ref:65.140 - timing_s/adv:1.114 - timing_s/update_actor:177.653 - timing_s/step:373.283 - timing_per_token_ms/gen:0.034 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.028 - perf/total_num_tokens:2367975.000 - perf/time_per_step:373.283 - perf/throughput:396.478
+[36m(TaskRunner pid=773110)[0m Training Progress:  25%|██▌       | 53/210 [19:06<16:39:37, 382.02s/it]
+[36m(TaskRunner pid=773110)[0m Training Progress:  26%|██▌       | 54/210 [25:28<16:33:26, 382.09s/it]
+[36m(TaskRunner pid=773110)[0m step:53 - global_seqlen/min:139097.000 - global_seqlen/max:177992.000 - global_seqlen/minmax_diff:38895.000 - global_seqlen/balanced_min:152748.000 - global_seqlen/balanced_max:152749.000 - global_seqlen/mean:152748.375 - actor/entropy_loss:0.046 - actor/pg_loss:0.003 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.026 - actor/kl_coef:0.001 - perf/mfu/actor:0.332 - critic/score/mean:0.853 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.853 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.004 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.004 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:364.470 - response_length/max:1024.000 - response_length/min:90.000 - response_length/clip_ratio:0.023 - prompt_length/mean:112.869 - prompt_length/max:882.000 - prompt_length/min:54.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:64.269 - timing_s/old_log_prob:69.422 - timing_s/ref:66.793 - timing_s/adv:1.212 - timing_s/update_actor:183.249 - timing_s/step:385.043 - timing_per_token_ms/gen:0.034 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.027 - perf/total_num_tokens:2443974.000 - perf/time_per_step:385.043 - perf/throughput:396.705
+[36m(TaskRunner pid=773110)[0m step:54 - global_seqlen/min:141107.000 - global_seqlen/max:165131.000 - global_seqlen/minmax_diff:24024.000 - global_seqlen/balanced_min:153879.000 - global_seqlen/balanced_max:153880.000 - global_seqlen/mean:153879.188 - actor/entropy_loss:0.044 - actor/pg_loss:-0.004 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.026 - actor/kl_coef:0.001 - perf/mfu/actor:0.337 - critic/score/mean:0.868 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.868 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.005 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.005 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:369.562 - response_length/max:1024.000 - response_length/min:82.000 - response_length/clip_ratio:0.016 - prompt_length/mean:111.311 - prompt_length/max:906.000 - prompt_length/min:53.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:62.040 - timing_s/old_log_prob:69.930 - timing_s/ref:66.814 - timing_s/adv:1.124 - timing_s/update_actor:182.122 - timing_s/step:382.128 - timing_per_token_ms/gen:0.033 - timing_per_token_ms/update_actor:0.074 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.027 - perf/total_num_tokens:2462067.000 - perf/time_per_step:382.128 - perf/throughput:402.691
+[36m(TaskRunner pid=773110)[0m test_gen_batch meta info: {'eos_token_id': 151645, 'pad_token_id': 151643, 'recompute_log_prob': False, 'do_sample': False, 'validate': True}
+[36m(TaskRunner pid=773110)[0m validation generation end
+[36m(TaskRunner pid=773110)[0m [prompt] system
+[36m(TaskRunner pid=773110)[0m You are Qwen, created by Alibaba Cloud. You are a helpful assistant.
+[36m(TaskRunner pid=773110)[0m user
+[36m(TaskRunner pid=773110)[0m Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market? Let's think step by step and output the final answer after "####".
+[36m(TaskRunner pid=773110)[0m assistant
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m [response] Let's break down the problem step by step:
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 1. **Calculate the total number of eggs laid per day:**
+[36m(TaskRunner pid=773110)[0m    Janet's ducks lay 16 eggs per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 2. **Calculate the total number of eggs used for breakfast:**
+[36m(TaskRunner pid=773110)[0m    Janet eats 3 eggs for breakfast every morning.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 3. **Calculate the total number of eggs used for baking muffins:**
+[36m(TaskRunner pid=773110)[0m    Janet bakes muffins for her friends with 4 eggs every day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 4. **Calculate the total number of eggs used daily:**
+[36m(TaskRunner pid=773110)[0m    Eggs used for breakfast + Eggs used for baking = 3 + 4 = 7 eggs per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 5. **Calculate the number of eggs remaining to be sold:**
+[36m(TaskRunner pid=773110)[0m    Total eggs laid - Eggs used = 16 - 7 = 9 eggs per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m 6. **Calculate the total amount of money made from selling the remaining eggs:**
+[36m(TaskRunner pid=773110)[0m    Janet sells the remaining 9 eggs at $2 per egg.
+[36m(TaskRunner pid=773110)[0m    Therefore, the total amount of money made = 9 eggs * $2/egg = $18 per day.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m #### 18
+[36m(TaskRunner pid=773110)[0m [ground_truth] 18
+[36m(TaskRunner pid=773110)[0m [score] 1.0
+[36m(TaskRunner pid=773110)[0m [prompt] system
+[36m(TaskRunner pid=773110)[0m You are Qwen, created by Alibaba Cloud. You are a helpful assistant.
+[36m(TaskRunner pid=773110)[0m user
+[36m(TaskRunner pid=773110)[0m How many vertical asymptotes does the graph of $y=\frac{2}{x^2+x-6}$ have? Let's think step by step and output the final answer within \boxed{}.
+[36m(TaskRunner pid=773110)[0m assistant
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m [response] To determine the number of vertical asymptotes for the function \( y = \frac{2}{x^2 + x - 6} \), we need to identify the values of \( x \) that make the denominator zero, as these are the points where the function is undefined and potentially has vertical asymptotes.
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m First, we factor the denominator:
+[36m(TaskRunner pid=773110)[0m \[ x^2 + x - 6 = (x + 3)(x - 2). \]
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m The denominator is zero when either \( x + 3 = 0 \) or \( x - 2 = 0 \). Solving these equations gives us:
+[36m(TaskRunner pid=773110)[0m \[ x = -3 \quad \text{and} \quad x = 2. \]
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m These are the points where the function is undefined. To confirm that these points are vertical asymptotes, we need to check that the numerator does not also become zero at these points. The numerator is 2, which is never zero. Therefore, the function has vertical asymptotes at \( x = -3 \) and \( x = 2 \).
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m Thus, the number of vertical asymptotes is \( 2 \).
+[36m(TaskRunner pid=773110)[0m 
+[36m(TaskRunner pid=773110)[0m The final answer is:
+[36m(TaskRunner pid=773110)[0m \[
+[36m(TaskRunner pid=773110)[0m \boxed{2}
+[36m(TaskRunner pid=773110)[0m \]
+[36m(TaskRunner pid=773110)[0m [ground_truth] 2
+[36m(TaskRunner pid=773110)[0m [score] 1.0
+[36m(TaskRunner pid=773110)[0m Training Progress:  26%|██▌       | 55/210 [33:56<18:24:03, 427.38s/it]
+[36m(TaskRunner pid=773110)[0m Training Progress:  27%|██▋       | 56/210 [40:12<17:32:10, 409.94s/it]
+[36m(TaskRunner pid=773110)[0m Training Progress:  27%|██▋       | 57/210 [46:26<16:55:17, 398.15s/it]
+[36m(TaskRunner pid=773110)[0m Training Progress:  28%|██▊       | 58/210 [52:43<16:31:23, 391.34s/it]
+[36m(TaskRunner pid=773110)[0m Training Progress:  28%|██▊       | 59/210 [58:52<16:07:34, 384.47s/it]
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/opt/tiger/verl/verl/trainer/main_ppo.py", line 175, in <module>
+    main()
+  File "/usr/local/lib/python3.11/dist-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+  File "/usr/local/lib/python3.11/dist-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/usr/local/lib/python3.11/dist-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/usr/local/lib/python3.11/dist-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+           ^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/hydra/_internal/hydra.py", line 119, in run
+    ret = run_job(
+          ^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/tiger/verl/verl/trainer/main_ppo.py", line 54, in main
+    run_ppo(config)
+  File "/opt/tiger/verl/verl/trainer/main_ppo.py", line 72, in run_ppo
+    ray.get(runner.run.remote(config))
+  File "/home/tiger/.local/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 21, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/tiger/.local/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 103, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tiger/.local/lib/python3.11/site-packages/ray/_private/worker.py", line 2782, in get
+    values, debugger_breakpoint = worker.get_objects(object_refs, timeout=timeout)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tiger/.local/lib/python3.11/site-packages/ray/_private/worker.py", line 903, in get_objects
+    ] = self.core_worker.get_objects(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "python/ray/_raylet.pyx", line 3211, in ray._raylet.CoreWorker.get_objects
+  File "python/ray/includes/common.pxi", line 83, in ray._raylet.check_status
+KeyboardInterrupt
+Exception ignored in atexit callback: <function shutdown at 0x7fccd060bb00>
+Traceback (most recent call last):
+  File "/home/tiger/.local/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 103, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tiger/.local/lib/python3.11/site-packages/ray/_private/worker.py", line 1921, in shutdown
+    time.sleep(0.5)
+KeyboardInterrupt: 
+[36m(TaskRunner pid=773110)[0m step:55 - global_seqlen/min:131387.000 - global_seqlen/max:162753.000 - global_seqlen/minmax_diff:31366.000 - global_seqlen/balanced_min:149433.000 - global_seqlen/balanced_max:149434.000 - global_seqlen/mean:149433.562 - actor/entropy_loss:0.044 - actor/pg_loss:0.000 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.027 - actor/kl_coef:0.001 - perf/mfu/actor:0.331 - val/test_score/openai/gsm8k:0.925 - val/test_score/DigitalLearningGmbH/MATH-lighteval:0.716 - critic/score/mean:0.874 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.874 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.004 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.004 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:355.843 - response_length/max:1024.000 - response_length/min:82.000 - response_length/clip_ratio:0.014 - prompt_length/mean:111.137 - prompt_length/max:947.000 - prompt_length/min:53.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:61.310 - timing_s/old_log_prob:68.471 - timing_s/ref:65.572 - timing_s/adv:1.079 - timing_s/update_actor:179.758 - timing_s/testing:131.339 - timing_s/step:507.620 - timing_per_token_ms/gen:0.034 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.027 - perf/total_num_tokens:2390937.000 - perf/time_per_step:507.620 - perf/throughput:294.381
+[36m(TaskRunner pid=773110)[0m step:56 - global_seqlen/min:139843.000 - global_seqlen/max:164138.000 - global_seqlen/minmax_diff:24295.000 - global_seqlen/balanced_min:150286.000 - global_seqlen/balanced_max:150287.000 - global_seqlen/mean:150286.500 - actor/entropy_loss:0.043 - actor/pg_loss:0.000 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.027 - actor/kl_coef:0.001 - perf/mfu/actor:0.333 - critic/score/mean:0.860 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.860 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.005 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.005 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:360.096 - response_length/max:1024.000 - response_length/min:82.000 - response_length/clip_ratio:0.016 - prompt_length/mean:109.549 - prompt_length/max:1004.000 - prompt_length/min:54.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:60.237 - timing_s/old_log_prob:68.997 - timing_s/ref:65.743 - timing_s/adv:1.088 - timing_s/update_actor:179.889 - timing_s/step:376.057 - timing_per_token_ms/gen:0.033 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.027 - perf/total_num_tokens:2404584.000 - perf/time_per_step:376.057 - perf/throughput:399.638
+[36m(TaskRunner pid=773110)[0m step:57 - global_seqlen/min:138341.000 - global_seqlen/max:161815.000 - global_seqlen/minmax_diff:23474.000 - global_seqlen/balanced_min:147307.000 - global_seqlen/balanced_max:147308.000 - global_seqlen/mean:147307.812 - actor/entropy_loss:0.042 - actor/pg_loss:-0.000 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.026 - actor/kl_coef:0.001 - perf/mfu/actor:0.332 - critic/score/mean:0.882 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.882 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.006 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.006 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:351.646 - response_length/max:1024.000 - response_length/min:80.000 - response_length/clip_ratio:0.017 - prompt_length/mean:108.691 - prompt_length/max:817.000 - prompt_length/min:54.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:61.099 - timing_s/old_log_prob:68.074 - timing_s/ref:65.122 - timing_s/adv:1.083 - timing_s/update_actor:176.875 - timing_s/step:372.365 - timing_per_token_ms/gen:0.034 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.028 - perf/total_num_tokens:2356925.000 - perf/time_per_step:372.365 - perf/throughput:395.600
+[36m(TaskRunner pid=773110)[0m step:58 - global_seqlen/min:135519.000 - global_seqlen/max:167059.000 - global_seqlen/minmax_diff:31540.000 - global_seqlen/balanced_min:150661.000 - global_seqlen/balanced_max:150662.000 - global_seqlen/mean:150661.125 - actor/entropy_loss:0.043 - actor/pg_loss:0.004 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.026 - actor/kl_coef:0.001 - perf/mfu/actor:0.335 - critic/score/mean:0.878 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.878 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.006 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.006 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:359.001 - response_length/max:1024.000 - response_length/min:80.000 - response_length/clip_ratio:0.017 - prompt_length/mean:111.815 - prompt_length/max:884.000 - prompt_length/min:52.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:60.858 - timing_s/old_log_prob:69.154 - timing_s/ref:66.360 - timing_s/adv:1.130 - timing_s/update_actor:179.106 - timing_s/step:376.700 - timing_per_token_ms/gen:0.033 - timing_per_token_ms/update_actor:0.074 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.028 - perf/total_num_tokens:2410578.000 - perf/time_per_step:376.700 - perf/throughput:399.950
+[36m(TaskRunner pid=773110)[0m step:59 - global_seqlen/min:136695.000 - global_seqlen/max:160033.000 - global_seqlen/minmax_diff:23338.000 - global_seqlen/balanced_min:147053.000 - global_seqlen/balanced_max:147054.000 - global_seqlen/mean:147053.438 - actor/entropy_loss:0.041 - actor/pg_loss:0.007 - actor/pg_clipfrac:0.000 - actor/ppo_kl:0.000 - actor/kl_loss:0.025 - actor/kl_coef:0.001 - perf/mfu/actor:0.332 - critic/score/mean:0.884 - critic/score/max:1.000 - critic/score/min:0.000 - critic/rewards/mean:0.884 - critic/rewards/max:1.000 - critic/rewards/min:0.000 - critic/advantages/mean:-0.006 - critic/advantages/max:1.789 - critic/advantages/min:-1.789 - critic/returns/mean:-0.006 - critic/returns/max:1.789 - critic/returns/min:-1.789 - response_length/mean:352.500 - response_length/max:1024.000 - response_length/min:91.000 - response_length/clip_ratio:0.014 - prompt_length/mean:107.042 - prompt_length/max:765.000 - prompt_length/min:53.000 - prompt_length/clip_ratio:0.000 - timing_s/gen:59.837 - timing_s/old_log_prob:67.601 - timing_s/ref:64.492 - timing_s/adv:1.074 - timing_s/update_actor:176.201 - timing_s/step:369.294 - timing_per_token_ms/gen:0.033 - timing_per_token_ms/update_actor:0.075 - timing_per_token_ms/adv:0.000 - timing_per_token_ms/ref:0.027 - perf/total_num_tokens:2352855.000 - perf/time_per_step:369.294 - perf/throughput:398.201
