@@ -194,4 +194,4 @@ def vocab_parallel_compute_entropy_loss(logits, eos_mask):
     # compute entropy
     entropy = vocab_parallel_entropy(logits)
     entropy_loss = verl_F.masked_mean(entropy, mask=eos_mask)
-    return entropy_loss
+    return entropy_loss, entropy

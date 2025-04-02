@@ -294,8 +294,8 @@ class MegatronPPOActor(BasePPOActor):
                                                                           advantages=advantages,
                                                                           eos_mask=response_mask,
                                                                           cliprange=clip_ratio)
-            entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask)
-            print_rank_0(f'entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask), shape: {entropy_loss.shape}, response_mask shape: {response_mask.shape}')
+            entropy_loss, entropy = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask)
+            print_rank_0(f'entropy_loss, entropy = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask), entropy_loss shape: {entropy_loss.shape}, entropy shape: {entropy.shape}, response_mask shape: {response_mask.shape}')
             policy_loss = pg_loss - entropy_loss * entropy_coeff
 
             metrics = {}

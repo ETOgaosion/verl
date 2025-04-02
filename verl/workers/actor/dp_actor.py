@@ -297,6 +297,7 @@ class DataParallelPPOActor(BasePPOActor):
                                                                                   cliprange=clip_ratio)
                     # compute entropy loss from entropy
                     entropy_loss = verl_F.masked_mean(entropy, response_mask)
+                    print_rank_0(f'entropy_loss = verl_F.masked_mean(entropy, response_mask), entropy_loss.shape: {entropy_loss.shape}, entropy.shape: {entropy.shape}, response_mask.shape: {response_mask.shape}')
 
                     # compute policy loss
                     policy_loss = pg_loss - entropy_loss * entropy_coeff
