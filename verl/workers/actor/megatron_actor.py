@@ -393,7 +393,6 @@ class MegatronPPOActor(BasePPOActor):
                 pass
             else:
                 raise NotImplementedError
-            exit()
 
         # add empty cache after each compute
         torch.cuda.empty_cache()

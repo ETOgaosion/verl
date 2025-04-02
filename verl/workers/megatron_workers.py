@@ -447,7 +447,6 @@ class ActorRolloutRefWorker(MegatronWorker):
         output.meta_info['micro_batch_size'] = self.config.rollout.log_prob_micro_batch_size_per_gpu
         output.meta_info['temperature'] = self.config.rollout.temperature
         old_log_probs = self.actor.compute_log_prob(data=output)
-        print('enter output.batch["old_log_probs"] = old_log_probs')
         output.batch['old_log_probs'] = old_log_probs
         output = output.to('cpu')
         # clear kv cache
