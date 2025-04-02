@@ -27,6 +27,7 @@ from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from verl.utils.ulysses import gather_heads_scatter_seq, gather_seq_scatter_heads, \
     get_ulysses_sequence_parallel_world_size, validate_ulysses_config
 from verl.utils.kernel import linear_cross_entropy
+from verl.utils.megatron_utils import print_rank_0
 from .common import FusedCausalLMOutputWithPast
 
 logger = logging.get_logger(__name__)
@@ -271,7 +272,7 @@ def llama_fused_forward(
     )
     
     hidden_states = outputs[0]
-    print(f'hidden_states = outputs[0], shape: {hidden_states.shape}')
+    print_rank_0(f'hidden_states = outputs[0], shape: {hidden_states.shape}')
     
     # DO not support TP here
     
@@ -301,7 +302,7 @@ def llama_fused_forward(
     else:
         # Inferencce mode
         logits = self.lm_head(hidden_states)
-        print(f'logits = self.lm_head(hidden_states), shape: {hidden_states.shape}')
+        print_rank_0(f'logits = self.lm_head(hidden_states), shape: {hidden_states.shape}')
         # loss is not needed
         # if labels is not None:
         #     loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)

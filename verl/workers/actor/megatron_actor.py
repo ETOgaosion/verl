@@ -46,6 +46,7 @@ from verl.trainer.ppo import core_algos
 from verl.workers.actor import BasePPOActor
 from verl.utils.py_functional import append_to_dict
 from verl.utils.torch_functional import logprobs_from_logits, masked_mean, broadcast_dict_tensor, split_dict_tensor_into_batches
+from verl.utils.megatron_utils import print_rank_0
 
 __all__ = ['MegatronPPOActor']
 
@@ -280,13 +281,13 @@ class MegatronPPOActor(BasePPOActor):
 
             # compute policy loss
             logits = output.logits
-            print(f'logits = output.logits, shape: {logits.shape}')
+            print_rank_0(f'logits = output.logits, shape: {logits.shape}')
             logits = logits[:, -response_length - 1:-1].contiguous()
-            print(f'logits = logits[:, -response_length - 1:-1].contiguous(), shape: {logits.shape}')
+            print_rank_0(f'logits = logits[:, -response_length - 1:-1].contiguous(), shape: {logits.shape}')
             logits_back = logits.clone()
-            print(f'logits_back = logits.clone(), shape: {logits.shape}')
+            print_rank_0(f'logits_back = logits.clone(), shape: {logits.shape}')
             log_prob = vocab_parallel_log_probs_from_logits(logits, responses)
-            print(f'log_prob = vocab_parallel_log_probs_from_logits(logits, responses), shape: {log_prob.shape}, responses shape: {responses.shape}')
+            print_rank_0(f'log_prob = vocab_parallel_log_probs_from_logits(logits, responses), shape: {log_prob.shape}, responses shape: {responses.shape}')
             logits = logits_back
             pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss(old_log_prob=old_log_prob,
                                                                           log_prob=log_prob,
@@ -294,7 +295,7 @@ class MegatronPPOActor(BasePPOActor):
                                                                           eos_mask=response_mask,
                                                                           cliprange=clip_ratio)
             entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask)
-            print(f'entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask), shape: {entropy_loss.shape}, response_mask shape: {response_mask.shape}')
+            print_rank_0(f'entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask), shape: {entropy_loss.shape}, response_mask shape: {response_mask.shape}')
             policy_loss = pg_loss - entropy_loss * entropy_coeff
 
             metrics = {}
@@ -342,7 +343,7 @@ class MegatronPPOActor(BasePPOActor):
                 forward_step_func=forward_step,
                 data_iterator=batch_generator,
                 model=self.actor_module,
-                num_microbatches=n_micro_batch,
+                num_microbatches=1,
                 seq_length=batch_size * seq_len,  # no use when input_shapes was set
                 micro_batch_size=1,  # no use when input_shapes was set
                 forward_only=forward_only,
@@ -352,7 +353,7 @@ class MegatronPPOActor(BasePPOActor):
                 forward_step_func=forward_step,
                 data_iterator=batch_generator,
                 model=self.actor_module,
-                num_microbatches=n_micro_batch,
+                num_microbatches=1,
                 seq_length=batch_size * seq_len,  # in use for pp = 1
                 micro_batch_size=1,  # in use for pp = 1
                 forward_only=forward_only,
@@ -392,6 +393,7 @@ class MegatronPPOActor(BasePPOActor):
                 pass
             else:
                 raise NotImplementedError
+            exit()
 
         # add empty cache after each compute
         torch.cuda.empty_cache()

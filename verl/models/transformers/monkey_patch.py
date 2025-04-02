@@ -107,9 +107,9 @@ def apply_monkey_patch(model: PreTrainedModel):
         from verl.models.transformers.llama import llama_fused_forward
         
         from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
-        from transformers.models.llama.modeling_llama import LlamaFroCausalLM
+        from transformers.models.llama.modeling_llama import LlamaForCausalLM
         
-        LlamaFroCausalLM.forward = llama_fused_forward
+        LlamaForCausalLM.forward = llama_fused_forward
         Qwen2ForCausalLM.forward = qwen2_fused_forward
         
         print("Monkey patch forward in Qwen2 and Llama")

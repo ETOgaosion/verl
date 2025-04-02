@@ -31,6 +31,7 @@ from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_u
 from verl.utils.seqlen_balancing import rearrange_micro_batches, get_reverse_idx
 import verl.utils.torch_functional as verl_F
 from verl.utils.kernel.linear_cross_entropy import linear_cross_entropy
+from verl.utils.megatron_utils import print_rank_0
 
 from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
 
@@ -115,17 +116,17 @@ class DataParallelPPOActor(BasePPOActor):
                                            **multi_modal_inputs,
                                            use_cache=False)  # prevent model thinks we are generating
                 logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
-                print(f'logits_rmpad = output.logits.squeeze(0), shape: {logits_rmpad.shape}')
+                print_rank_0(f'logits_rmpad = output.logits.squeeze(0), shape: {logits_rmpad.shape}')
 
                 logits_rmpad.div_(temperature)
-                print(f'logits_rmpad.div_(temperature), temperature: {temperature}')
+                print_rank_0(f'logits_rmpad.div_(temperature), temperature: {temperature}')
                 # compute entropy
                 entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad)  # ((total_nnz / sp) + pad)
-                print(f'entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad), shape: {entropy_rmpad.shape}')
+                print_rank_0(f'entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad), shape: {entropy_rmpad.shape}')
 
                 # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
                 log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
-                print(f'log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled), shape: {log_probs.shape}, input_ids_rmpad_rolled.shape: {input_ids_rmpad_rolled.shape}')
+                print_rank_0(f'log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled), shape: {log_probs.shape}, input_ids_rmpad_rolled.shape: {input_ids_rmpad_rolled.shape}')
 
                 # gather log_prob if sp > 1
                 if self.use_ulysses_sp:
@@ -327,6 +328,7 @@ class DataParallelPPOActor(BasePPOActor):
                         'actor/ppo_kl': ppo_kl.detach().item(),
                     }
                     append_to_dict(metrics, data)
+                    exit()
 
                 grad_norm = self._optimizer_step()
                 data = {'actor/grad_norm': grad_norm.detach().item()}
