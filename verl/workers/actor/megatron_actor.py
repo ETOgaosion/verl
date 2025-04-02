@@ -281,13 +281,13 @@ class MegatronPPOActor(BasePPOActor):
 
             # compute policy loss
             logits = output.logits
-            print_rank_0(f'logits = output.logits, shape: {logits.shape}')
+            print(f'logits = output.logits, shape: {logits.shape}')
             logits = logits[:, -response_length - 1:-1].contiguous()
-            print_rank_0(f'logits = logits[:, -response_length - 1:-1].contiguous(), shape: {logits.shape}')
+            print(f'logits = logits[:, -response_length - 1:-1].contiguous(), shape: {logits.shape}')
             logits_back = logits.clone()
-            print_rank_0(f'logits_back = logits.clone(), shape: {logits.shape}')
+            print(f'logits_back = logits.clone(), shape: {logits.shape}')
             log_prob = vocab_parallel_log_probs_from_logits(logits, responses)
-            print_rank_0(f'log_prob = vocab_parallel_log_probs_from_logits(logits, responses), shape: {log_prob.shape}, responses shape: {responses.shape}')
+            print(f'log_prob = vocab_parallel_log_probs_from_logits(logits, responses), shape: {log_prob.shape}, responses shape: {responses.shape}')
             logits = logits_back
             pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss(old_log_prob=old_log_prob,
                                                                           log_prob=log_prob,
@@ -295,7 +295,7 @@ class MegatronPPOActor(BasePPOActor):
                                                                           eos_mask=response_mask,
                                                                           cliprange=clip_ratio)
             entropy_loss, entropy = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask)
-            print_rank_0(f'entropy_loss, entropy = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask), entropy_loss shape: {entropy_loss.shape}, entropy shape: {entropy.shape}, response_mask shape: {response_mask.shape}')
+            print(f'entropy_loss, entropy = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask), entropy_loss shape: {entropy_loss.shape}, entropy shape: {entropy.shape}, response_mask shape: {response_mask.shape}')
             policy_loss = pg_loss - entropy_loss * entropy_coeff
 
             metrics = {}
@@ -383,6 +383,7 @@ class MegatronPPOActor(BasePPOActor):
                 chunk.zero_grad_buffer()
 
             metric_micro_batch = self.forward_backward_batch(data)
+            print(f'after forward_backward_batch')
             for metric in metric_micro_batch:
                 append_to_dict(metrics, metric)  # append the metric from this micro-batch to global metrics.
 
