@@ -343,7 +343,7 @@ class MegatronPPOActor(BasePPOActor):
                 forward_step_func=forward_step,
                 data_iterator=batch_generator,
                 model=self.actor_module,
-                num_microbatches=1,
+                num_microbatches=n_micro_batch,
                 seq_length=batch_size * seq_len,  # no use when input_shapes was set
                 micro_batch_size=1,  # no use when input_shapes was set
                 forward_only=forward_only,
@@ -353,7 +353,7 @@ class MegatronPPOActor(BasePPOActor):
                 forward_step_func=forward_step,
                 data_iterator=batch_generator,
                 model=self.actor_module,
-                num_microbatches=1,
+                num_microbatches=n_micro_batch,
                 seq_length=batch_size * seq_len,  # in use for pp = 1
                 micro_batch_size=1,  # in use for pp = 1
                 forward_only=forward_only,
