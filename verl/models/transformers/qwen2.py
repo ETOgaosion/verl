@@ -243,6 +243,7 @@ def qwen2_fused_forward(
     cache_position: Optional[torch.LongTensor] = None,
     logits_to_keep: Union[int, torch.Tensor] = 0,
     fuse_entropy_logprobs: bool = False,
+    temperature: float = 1.0,
     **kwargs,
 ) -> Union[Tuple, FusedCausalLMOutputWithPast]:
 

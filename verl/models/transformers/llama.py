@@ -242,8 +242,8 @@ def llama_fused_forward(
     return_dict: Optional[bool] = None,
     cache_position: Optional[torch.LongTensor] = None,
     logits_to_keep: Union[int, torch.Tensor] = 0,
-    temperature: Optional[float] = None,
     fuse_entropy_logprobs: bool = False,
+    temperature: Optional[float] = None,
     **kwargs,
 ) -> Union[Tuple, FusedCausalLMOutputWithPast]:
     """

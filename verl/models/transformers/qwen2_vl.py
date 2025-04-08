@@ -311,6 +311,7 @@ def qwen2_vl_fused_forward(
     rope_deltas: Optional[torch.LongTensor] = None,
     cache_position: Optional[torch.LongTensor] = None,
     fuse_entropy_logprobs: bool = False,
+    temperature: float = 1.0,
 ) -> Union[Tuple, FusedCausalLMOutputWithPast]:
 
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
