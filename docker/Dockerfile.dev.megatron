@@ -3,13 +3,14 @@ FROM nvcr.io/nvidia/pytorch:25.01-py3
 # Define environments
 ENV MAX_JOBS=64
 
-RUN apt-get update && \
-    apt install -y aria2
+RUN apt-get update
 
 RUN pip install ninja ray[default]
 
 # 1. Install FlashInfer
-RUN pip install git+https://github.com/flashinfer-ai/flashinfer.git@v0.2.2
+RUN git clone -b v0.2.2.post1 https://github.com/flashinfer-ai/flashinfer.git --recursive && \
+    cd flashinfer && \
+    pip install --no-build-isolation --verbose --editable .
 
 # 2. Install vLLM
 RUN git clone -b v0.8.3 https://github.com/vllm-project/vllm.git && \
@@ -21,21 +22,26 @@ RUN cd vllm && pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simp
 RUN cd vllm && pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -r requirements/cuda.txt
 
 RUN cd vllm && \
-    MAX_JOBS=32 && pip install . --no-build-isolation
+    MAX_JOBS=32 && pip install -e . --no-build-isolation
+
+# 4. Install Sglang
+RUN git clone -b v0.4.5.post3 https://github.com/sgl-project/sglang.git && \
+    cd sglang && \
+    pip install --no-deps -e "python[all]"
 
 # 3. Install Extra
-RUN pip install torchdata \
+RUN pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple torchdata \
     "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
     "numpy<2.0.0" "pyarrow>=15.0.0" pandas \
     ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
     pytest py-spy pre-commit ruff
 
-# 4. Install Sglang
-RUN pip install "sglang[all]>=0.4.5.post3"
+RUN apt install -y aria2
 
 # 5. Install cudnn
-RUN aria2c --max-tries=9999 https://developer.download.nvidia.com/compute/cudnn/9.8.0/local_installers/cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb && \
-    dpkg -i cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb && \
+RUN aria2c --max-tries=99999 https://developer.download.nvidia.com/compute/cudnn/9.8.0/local_installers/cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb
+
+RUN dpkg -i cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb && \
     cp /var/cudnn-local-repo-ubuntu2204-9.8.0/cudnn-*-keyring.gpg /usr/share/keyrings/ && \
     apt-get update && \
     apt-get -y install cudnn && \
@@ -47,7 +53,12 @@ RUN git clone https://github.com/NVIDIA/apex.git && \
     pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" ./
 
 # 7. Install TransformerEngine
-RUN export NVTE_FRAMEWORK=pytorch && pip3 install --no-deps git+https://github.com/NVIDIA/TransformerEngine.git@v2.2
+RUN git clone -b v2.2 https://github.com/NVIDIA/TransformerEngine.git && \
+    cd TransformerEngine && \
+    export NVTE_FRAMEWORK=pytorch && \
+    pip3 install --no-deps -e . --verbose
 
 # 8. Install Megatron-LM
-RUN pip3 install git+https://github.com/NVIDIA/Megatron-LM.git@v0.12.0
+RUN git clone -b v0.12.0 https://github.com/NVIDIA/Megatron-LM.git && \
+    cd Megatron-LM && \
+    pip3 install --no-deps -e . --verbose
