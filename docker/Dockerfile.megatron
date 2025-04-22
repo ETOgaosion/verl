@@ -4,7 +4,7 @@ FROM nvcr.io/nvidia/pytorch:25.01-py3
 ENV MAX_JOBS=64
 
 RUN apt-get update && \
-    apt install -y aria2
+    apt-get install -y aria2 libfreeimage3 libfreeimage-dev zlib1g
 
 RUN pip install ninja ray[default]
 
@@ -31,15 +31,17 @@ RUN pip install torchdata \
     pytest py-spy pre-commit ruff
 
 # 4. Install Sglang
-RUN pip install "sglang[all]>=0.4.5.post3"
+RUN pip install --no-deps "sglang[all]>=0.4.5.post3"
 
 # 5. Install cudnn
 RUN aria2c --max-tries=9999 https://developer.download.nvidia.com/compute/cudnn/9.8.0/local_installers/cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb && \
     dpkg -i cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb && \
     cp /var/cudnn-local-repo-ubuntu2204-9.8.0/cudnn-*-keyring.gpg /usr/share/keyrings/ && \
     apt-get update && \
-    apt-get -y install cudnn && \
+    apt-get -y install cudnn-cuda-12 && \
     rm cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb
+
+RUN pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple nvidia-cudnn-cu12
 
 # 6. Install Apex
 RUN git clone https://github.com/NVIDIA/apex.git && \
@@ -50,4 +52,7 @@ RUN git clone https://github.com/NVIDIA/apex.git && \
 RUN export NVTE_FRAMEWORK=pytorch && pip3 install --no-deps git+https://github.com/NVIDIA/TransformerEngine.git@v2.2
 
 # 8. Install Megatron-LM
-RUN pip3 install git+https://github.com/NVIDIA/Megatron-LM.git@v0.12.0
+RUN pip3 install git+https://github.com/NVIDIA/Megatron-LM.git@core_r0.12.0
+
+# 9. Fix torch triton bug
+RUN pip install triton==3.1.0
