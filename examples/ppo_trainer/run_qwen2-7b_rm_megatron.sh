@@ -45,7 +45,6 @@ python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megat
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     critic.optim.lr=1e-5 \
-    critic.model.use_remove_padding=True \
     critic.optim.lr_warmup_steps_ratio=0.05 \
     critic.model.path="$HOME/models/Qwen2-7B-Instruct" \
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=2 \
