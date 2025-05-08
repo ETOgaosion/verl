@@ -20,7 +20,7 @@ python3 -m verl.trainer.main_ppo \
     data.max_response_length=8192 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
-    actor_rollout_ref.model.path=Qwen/Qwen3-30B-A3B-Base \
+    actor_rollout_ref.model.path=Qwen/Qwen3-235B-A22B \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
