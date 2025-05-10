@@ -339,11 +339,7 @@ class ActorRolloutRefWorker(MegatronWorker):
             log_gpu_memory_usage("After rollout init", logger=logger)
 
         if self._is_ref:
-            self.ref_module, self.ref_model_config = self._build_model_optimizer(
-                model_path=self.config.model.path,
-                optim_config=None,
-                override_model_config=override_model_config,
-            )
+            self.ref_module, self.ref_model_config = self._build_model_optimizer(model_path=self.config.model.path, optim_config=None, override_model_config=override_model_config, override_transformer_config=override_transformer_config)
             log_gpu_memory_usage("After ref model init", logger=logger)
             self.ref_policy = MegatronPPOActor(
                 config=self.config.ref,
