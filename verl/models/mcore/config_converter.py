@@ -96,6 +96,7 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
 
         # Override transformer config
         base_config.update({"num_layers_in_first_pipeline_stage": adopted_num_layers_in_first_pipeline_stage, "num_layers_in_last_pipeline_stage": adopted_num_layers_in_last_pipeline_stage})
+        print(f"[INFO] Since the number of layers is not divisible by pipeline parallel size, the adopted num_layers_in_first_pipeline_stage is {adopted_num_layers_in_first_pipeline_stage}, and num_layers_in_last_pipeline_stage is {adopted_num_layers_in_last_pipeline_stage}.")
 
     # Update with any provided overrides
     base_config.update(kwargs)
