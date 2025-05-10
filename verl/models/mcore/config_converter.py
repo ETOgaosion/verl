@@ -20,10 +20,11 @@
 import torch
 import torch.nn.functional as F
 from megatron.core.transformer import MLATransformerConfig, TransformerConfig
+from omegaconf import DictConfig
 from transformers import PretrainedConfig
 
 
-def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype, **kwargs) -> TransformerConfig:
+def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig, **kwargs) -> TransformerConfig:
     """
     Create a base TransformerConfig with common parameters across different model architectures.
     TODO: (ycl) use dataclass or converter config?
@@ -76,6 +77,26 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
         "moe_token_dispatcher_type": "alltoall",
     }
 
+    # Automatically calculate balanced pipeline layer distribution
+    pp_size = mpu.get_pipeline_model_parallel_world_size()
+    total_layers = hf_config.num_hidden_layers
+    if pp_size > 1 and total_layers % pp_size != 0:
+        left_layers = total_layers % pp_size
+        recommended_num_layers_in_first_pipeline_stage = left_layers // 2
+        recommended_num_layers_in_last_pipeline_stage = left_layers - recommended_num_layers_in_first_pipeline_stage
+
+        if override_transformer_config.num_layers_in_first_pipeline_stage is not None and override_transformer_config.num_layers_in_first_pipeline_stage != recommended_num_layers_in_first_pipeline_stage:
+            print(f"[WARNING] The recommended num_layers_in_first_pipeline_stage is {recommended_num_layers_in_first_pipeline_stage}, but in override config is {override_transformer_config.num_layers_in_first_pipeline_stage}")
+        else:
+            override_transformer_config.num_layers_in_first_pipeline_stage = recommended_num_layers_in_first_pipeline_stage
+        if override_transformer_config.num_layers_in_last_pipeline_stage is not None and override_transformer_config.num_layers_in_last_pipeline_stage != recommended_num_layers_in_last_pipeline_stage:
+            print(f"[WARNING] The recommended num_layers_in_last_pipeline_stage is {recommended_num_layers_in_last_pipeline_stage}, but in override config is {override_transformer_config.num_layers_in_last_pipeline_stage}")
+        else:
+            override_transformer_config.num_layers_in_last_pipeline_stage = recommended_num_layers_in_last_pipeline_stage
+
+        # Override transformer config
+        base_config.update({"num_layers_in_first_pipeline_stage": override_transformer_config.num_layers_in_first_pipeline_stage, "num_layers_in_last_pipeline_stage": override_transformer_config.num_layers_in_last_pipeline_stage})
+
     # Update with any provided overrides
     base_config.update(kwargs)
     print(f"Overridden TF init config: {base_config}")
@@ -83,7 +104,7 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
     return TransformerConfig(**base_config)
 
 
-def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig) -> TransformerConfig:
     # for LlamaForCausalLM or Qwen2ForCausalLM
     qkv_bias = True if "Qwen2ForCausalLM" in hf_config.architectures else getattr(hf_config, "attention_bias", False)
     qk_layernorm = True if "Qwen3ForCausalLM" in hf_config.architectures else False
@@ -98,7 +119,9 @@ def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) ->
     )
 
 
-def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig) -> TransformerConfig:
+    # Follow Pai-Megatron-Patch's configuration
+    # https://github.com/alibaba/Pai-Megatron-Patch/blob/main/examples/qwen2/run_mcore_qwen2_moe.sh
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
@@ -106,28 +129,28 @@ def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype)
         add_bias_linear=False,
         layernorm_epsilon=hf_config.rms_norm_eps,
         # MoE specific
-        moe_ffn_hidden_size=hf_config.moe_intermediate_size,
-        moe_router_bias_update_rate=0.001,
+        moe_grouped_gemm=True,
+        moe_token_dispatcher_type="alltoall",
         moe_router_topk=hf_config.num_experts_per_tok,
         num_moe_experts=hf_config.num_experts,
-        moe_shared_expert_intermediate_size=hf_config.shared_expert_intermediate_size,
+        moe_ffn_hidden_size=hf_config.moe_intermediate_size,
+        moe_router_load_balancing_type="seq_aux_loss",
         moe_aux_loss_coeff=hf_config.router_aux_loss_coef,
-        # moe_aux_loss_coeff=0.0,
-        moe_router_load_balancing_type="aux_loss",
+        moe_layer_freq=[1] * 28,
+        moe_shared_expert_intermediate_size=hf_config.shared_expert_intermediate_size,
+        moe_layer_recompute=True,
         moe_shared_expert_overlap=True,
-        moe_grouped_gemm=True,
-        moe_router_score_function="softmax",
         # Other optimizations
         persist_layer_norm=True,
         bias_activation_fusion=True,
         bias_dropout_fusion=True,
         # Qwen specific
-        moe_router_pre_softmax=True,
+        # moe_router_pre_softmax=True,
         add_qkv_bias=True,
     )
 
 
-def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig) -> TransformerConfig:
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
@@ -155,7 +178,9 @@ def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype) 
     )
 
 
-def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig) -> TransformerConfig:
+    # Follow Pai-Megatron-Patch's configuration
+    # https://github.com/alibaba/Pai-Megatron-Patch/blob/main/examples/qwen3/run_mcore_qwen3.sh
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
@@ -163,21 +188,20 @@ def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype)
         add_bias_linear=False,
         layernorm_epsilon=hf_config.rms_norm_eps,
         # MoE specific
-        moe_ffn_hidden_size=hf_config.moe_intermediate_size,
-        moe_router_bias_update_rate=0.001,
+        moe_grouped_gemm=True,
+        moe_token_dispatcher_type="alltoall",
         moe_router_topk=hf_config.num_experts_per_tok,
         num_moe_experts=hf_config.num_experts,
-        moe_aux_loss_coeff=hf_config.router_aux_loss_coef,
-        # moe_aux_loss_coeff=0.0,
+        moe_ffn_hidden_size=hf_config.moe_intermediate_size,
         moe_router_load_balancing_type="aux_loss",
-        moe_grouped_gemm=True,
-        moe_router_score_function="softmax",
+        moe_aux_loss_coeff=hf_config.router_aux_loss_coef,
+        moe_layer_freq=[1] * 48,
+        moe_router_pre_softmax=True,
         # Other optimizations
         persist_layer_norm=True,
         bias_activation_fusion=True,
         bias_dropout_fusion=True,
         # Qwen specific
-        moe_router_pre_softmax=True,
         qk_layernorm=True,
     )
 
