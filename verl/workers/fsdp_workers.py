@@ -206,7 +206,13 @@ class ActorRolloutRefWorker(Worker):
             else:
                 actor_module_class = AutoModelForCausalLM
 
-            actor_module = actor_module_class.from_pretrained(pretrained_model_name_or_path=local_path, torch_dtype=torch_dtype, config=actor_model_config, attn_implementation="flash_attention_2", trust_remote_code=trust_remote_code, device_map="auto")
+            actor_module = actor_module_class.from_pretrained(
+                pretrained_model_name_or_path=local_path,
+                torch_dtype=torch_dtype,
+                config=actor_model_config,
+                attn_implementation="flash_attention_2",
+                trust_remote_code=trust_remote_code,
+            )
 
             if use_remove_padding or self.ulysses_sequence_parallel_size > 1:
                 from verl.models.transformers.monkey_patch import apply_monkey_patch
@@ -792,7 +798,13 @@ class CriticWorker(Worker):
             warnings.simplefilter("ignore")
             critic_model_config.classifier_dropout = 0.0
             critic_model_config.hidden_dropout = "0"
-            critic_module = AutoModelForTokenClassification.from_pretrained(pretrained_model_name_or_path=local_path, torch_dtype=torch_dtype, config=critic_model_config, attn_implementation="flash_attention_2", trust_remote_code=config.model.get("trust_remote_code", False), device_map="auto")
+            critic_module = AutoModelForTokenClassification.from_pretrained(
+                pretrained_model_name_or_path=local_path,
+                torch_dtype=torch_dtype,
+                config=critic_model_config,
+                attn_implementation="flash_attention_2",
+                trust_remote_code=config.model.get("trust_remote_code", False),
+            )
 
             use_remove_padding = config.model.get("use_remove_padding", False)
             if use_remove_padding or self.ulysses_sequence_parallel_size > 1:
@@ -1074,7 +1086,13 @@ class RewardModelWorker(Worker):
         with init_context(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
             model_config.classifier_dropout = 0.0
-            reward_module = AutoModelForTokenClassification.from_pretrained(pretrained_model_name_or_path=local_path, config=model_config, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", trust_remote_code=trust_remote_code, device_map="auto")
+            reward_module = AutoModelForTokenClassification.from_pretrained(
+                pretrained_model_name_or_path=local_path,
+                config=model_config,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                trust_remote_code=trust_remote_code,
+            )
 
             if config.model.get("use_remove_padding", False) or self.ulysses_sequence_parallel_size > 1:
                 from verl.models.transformers.monkey_patch import apply_monkey_patch
