@@ -20,10 +20,11 @@
 import torch
 import torch.nn.functional as F
 from megatron.core.transformer import MLATransformerConfig, TransformerConfig
+from omegaconf import DictConfig
 from transformers import PretrainedConfig
 
 
-def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype, **kwargs) -> TransformerConfig:
+def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None, **kwargs) -> TransformerConfig:
     """
     Create a base TransformerConfig with common parameters across different model architectures.
     TODO: (ycl) use dataclass or converter config?
@@ -76,6 +77,30 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
         "moe_token_dispatcher_type": "alltoall",
     }
 
+    if override_transformer_config is not None:
+        base_config.update(dict(override_transformer_config))
+
+    # Automatically calculate balanced pipeline layer distribution
+    pp_size = mpu.get_pipeline_model_parallel_world_size()
+    total_layers = hf_config.num_hidden_layers
+    if pp_size > 1 and total_layers % pp_size != 0:
+        left_layers = total_layers % pp_size
+        recommended_num_layers_in_first_pipeline_stage = left_layers // 2
+        recommended_num_layers_in_last_pipeline_stage = left_layers - recommended_num_layers_in_first_pipeline_stage
+
+        adopted_num_layers_in_first_pipeline_stage = recommended_num_layers_in_first_pipeline_stage
+        adopted_num_layers_in_last_pipeline_stage = recommended_num_layers_in_last_pipeline_stage
+        if override_transformer_config and override_transformer_config.num_layers_in_first_pipeline_stage is not None and override_transformer_config.num_layers_in_first_pipeline_stage != recommended_num_layers_in_first_pipeline_stage:
+            print(f"[WARNING] The recommended num_layers_in_first_pipeline_stage is {recommended_num_layers_in_first_pipeline_stage}, but in override config is {override_transformer_config.num_layers_in_first_pipeline_stage}")
+            adopted_num_layers_in_first_pipeline_stage = override_transformer_config.num_layers_in_first_pipeline_stage
+        if override_transformer_config and override_transformer_config.num_layers_in_last_pipeline_stage is not None and override_transformer_config.num_layers_in_last_pipeline_stage != recommended_num_layers_in_last_pipeline_stage:
+            print(f"[WARNING] The recommended num_layers_in_last_pipeline_stage is {recommended_num_layers_in_last_pipeline_stage}, but in override config is {override_transformer_config.num_layers_in_last_pipeline_stage}")
+            adopted_num_layers_in_last_pipeline_stage = override_transformer_config.num_layers_in_last_pipeline_stage
+
+        # Override transformer config
+        base_config.update({"num_layers_in_first_pipeline_stage": adopted_num_layers_in_first_pipeline_stage, "num_layers_in_last_pipeline_stage": adopted_num_layers_in_last_pipeline_stage})
+        print(f"[INFO] Since the number of layers is not divisible by pipeline parallel size, the adopted num_layers_in_first_pipeline_stage is {adopted_num_layers_in_first_pipeline_stage}, and num_layers_in_last_pipeline_stage is {adopted_num_layers_in_last_pipeline_stage}.")
+
     # Update with any provided overrides
     base_config.update(kwargs)
     print(f"Overridden TF init config: {base_config}")
@@ -83,7 +108,7 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
     return TransformerConfig(**base_config)
 
 
-def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> TransformerConfig:
     # for LlamaForCausalLM or Qwen2ForCausalLM
     qkv_bias = True if "Qwen2ForCausalLM" in hf_config.architectures else getattr(hf_config, "attention_bias", False)
     qk_layernorm = True if "Qwen3ForCausalLM" in hf_config.architectures else False
@@ -91,6 +116,7 @@ def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) ->
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
+        override_transformer_config=override_transformer_config,
         use_cpu_initialization=False,
         add_bias_linear=False,
         add_qkv_bias=qkv_bias,
@@ -98,10 +124,11 @@ def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) ->
     )
 
 
-def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> TransformerConfig:
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
+        override_transformer_config=override_transformer_config,
         use_cpu_initialization=False,
         add_bias_linear=False,
         layernorm_epsilon=hf_config.rms_norm_eps,
@@ -127,10 +154,11 @@ def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype)
     )
 
 
-def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> TransformerConfig:
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
+        override_transformer_config=override_transformer_config,
         use_cpu_initialization=False,
         add_bias_linear=False,
         layernorm_epsilon=hf_config.rms_norm_eps,
@@ -155,10 +183,11 @@ def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype) 
     )
 
 
-def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> TransformerConfig:
     return _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
+        override_transformer_config=override_transformer_config,
         use_cpu_initialization=False,
         add_bias_linear=False,
         layernorm_epsilon=hf_config.rms_norm_eps,
@@ -182,16 +211,16 @@ def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype)
     )
 
 
-def hf_to_mcore_config_dpskv3(hf_config: PretrainedConfig, dtype: torch.dtype) -> MLATransformerConfig:
+def hf_to_mcore_config_dpskv3(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> MLATransformerConfig:
     # DeepseekV3ForCausalLM
     raise NotImplementedError("DeepseekV3ForCausalLM is not supported yet")
 
 
-def hf_to_mcore_config_qwen2_5_vl(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_qwen2_5_vl(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> TransformerConfig:
     # Qwen2_5_VLForConditionalGeneration
     raise NotImplementedError("Qwen2_5_VLForConditionalGeneration is not supported yet")
 
 
-def hf_to_mcore_config_llama4(hf_config: PretrainedConfig, dtype: torch.dtype) -> TransformerConfig:
+def hf_to_mcore_config_llama4(hf_config: PretrainedConfig, dtype: torch.dtype, override_transformer_config: DictConfig = None) -> TransformerConfig:
     # Llama4ForConditionalGeneration
     raise NotImplementedError("Llama4ForConditionalGeneration is not supported yet")
