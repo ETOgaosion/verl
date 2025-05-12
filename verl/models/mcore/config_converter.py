@@ -84,12 +84,9 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
     pp_size = mpu.get_pipeline_model_parallel_world_size()
     total_layers = hf_config.num_hidden_layers
     if pp_size > 1 and total_layers % pp_size != 0:
-        left_layers = total_layers % pp_size
-        recommended_num_layers_in_first_pipeline_stage = left_layers // 2
-        recommended_num_layers_in_last_pipeline_stage = left_layers - recommended_num_layers_in_first_pipeline_stage
+        from verl.utils.megatron_utils import get_balanced_layer_distribution
 
-        adopted_num_layers_in_first_pipeline_stage = recommended_num_layers_in_first_pipeline_stage
-        adopted_num_layers_in_last_pipeline_stage = recommended_num_layers_in_last_pipeline_stage
+        recommended_num_layers_in_first_pipeline_stage, recommended_num_layers_in_last_pipeline_stage = get_balanced_layer_distribution(total_layers, pp_size)
         if override_transformer_config and override_transformer_config.num_layers_in_first_pipeline_stage is not None and override_transformer_config.num_layers_in_first_pipeline_stage != recommended_num_layers_in_first_pipeline_stage:
             print(f"[WARNING] The recommended num_layers_in_first_pipeline_stage is {recommended_num_layers_in_first_pipeline_stage}, but in override config is {override_transformer_config.num_layers_in_first_pipeline_stage}")
             adopted_num_layers_in_first_pipeline_stage = override_transformer_config.num_layers_in_first_pipeline_stage
