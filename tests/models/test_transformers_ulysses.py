@@ -190,10 +190,24 @@ def _hf_casual_fwd_bwd(config, sp_size, dp_size):
         sync_model_parameters_global(model)
 
     # different rank will generate different input_ids following fsdp
-    input_ids = torch.randint(low=0, high=config.vocab_size, size=(batch_size, seqlen), device="cuda")
-    attention_mask = create_random_mask(
-        input_ids=input_ids, max_ratio_of_left_padding=0, max_ratio_of_valid_token=0.9, min_ratio_of_valid_token=0.8
-    )
+    import os
+
+    if os.path.exists(f"input_ids_{torch.distributed.get_rank()}") and os.path.exists(
+        f"attention_mask_{torch.distributed.get_rank()}"
+    ):
+        with open(f"input_ids_{torch.distributed.get_rank()}", "rb") as f:
+            input_ids = torch.load(f)
+        with open(f"attention_mask_{torch.distributed.get_rank()}", "rb") as f:
+            attention_mask = torch.load(f)
+    else:
+        input_ids = torch.randint(low=0, high=config.vocab_size, size=(batch_size, seqlen), device="cuda")
+        with open(f"input_ids_{torch.distributed.get_rank()}", "wb") as f:
+            torch.save(input_ids, f)
+        attention_mask = create_random_mask(
+            input_ids=input_ids, max_ratio_of_left_padding=0, max_ratio_of_valid_token=0.9, min_ratio_of_valid_token=0.8
+        )
+        with open(f"attention_mask_{torch.distributed.get_rank()}", "wb") as f:
+            torch.save(attention_mask, f)
     position_ids = compute_position_id_with_mask(
         attention_mask
     )  # TODO(sgm): we can construct the position_ids_rmpad here
