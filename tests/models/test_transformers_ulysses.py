@@ -259,6 +259,8 @@ def _hf_casual_fwd_bwd(config, sp_size, dp_size):
         input_ids_full, position_ids=position_ids_full, use_cache=False
     ).logits  # (1, total_nnz, vocab_size)
 
+    torch.testing.assert_close(logits_rmpad_local, logits_full, rtol=1e-2, atol=3e-5)
+
     mean_local = logits_rmpad_local.mean()
     mean_full = logits_full.mean()
 
