@@ -210,6 +210,56 @@ def greedy_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool
     return partitions
 
 
+def snake_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool) -> list[list[int]]:
+    """Partition indices using a snake (zig-zag) assignment over sorted values.
+
+    Sort values descending, then assign in 0→k-1→0 zig-zag order so large and
+    small elements interleave across partitions. When equal_size is True, each
+    partition receives exactly len(seqlen_list) / k_partitions items.
+    """
+
+    assert k_partitions > 0, "k_partitions must be > 0"
+    assert len(seqlen_list) >= k_partitions, f"{len(seqlen_list)} < {k_partitions}"
+    if k_partitions == 1:
+        return [list(range(len(seqlen_list)))]
+
+    if equal_size:
+        assert len(seqlen_list) % k_partitions == 0, f"{len(seqlen_list)} % {k_partitions} != 0"
+        target_size = len(seqlen_list) // k_partitions
+    else:
+        target_size = None
+
+    # Sort by value descending, keep original indices
+    sorted_pairs = sorted(enumerate(seqlen_list), key=lambda x: x[1], reverse=True)
+    partitions: list[list[int]] = [[] for _ in range(k_partitions)]
+
+    # Build snake pattern: 0->k-1->0 repeating (length 2k-2)
+    pattern = list(range(k_partitions)) + list(range(k_partitions - 2, 0, -1))
+    if not pattern:  # safety for k_partitions == 1 (should have returned earlier)
+        pattern = [0]
+    ptr = 0
+    pattern_len = len(pattern)
+
+    for orig_idx, _ in sorted_pairs:
+        attempts = 0
+        while True:
+            p = pattern[ptr % pattern_len]
+            ptr += 1
+            if target_size is None or len(partitions[p]) < target_size:
+                partitions[p].append(orig_idx)
+                break
+
+            attempts += 1
+            if attempts > k_partitions * 2:
+                raise RuntimeError("Failed to assign partition in snake_partition")
+
+    if target_size is not None:
+        for i, partition in enumerate(partitions):
+            assert len(partition) == target_size, f"partition {i} size {len(partition)} != {target_size}"
+
+    return partitions
+
+
 def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     """
     Calculates partitions of indices from seqlen_list such that the sum of sequence lengths
@@ -250,7 +300,7 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
         assert seen_idx == set(range(len(seqlen_list)))
         return sorted_partitions
 
-    partitions = karmarkar_karp(seqlen_list=seqlen_list, k_partitions=k_partitions, equal_size=equal_size)
+    partitions = snake_partition(seqlen_list=seqlen_list, k_partitions=k_partitions, equal_size=equal_size)
     return _check_and_sort_partitions(partitions)
 
 
