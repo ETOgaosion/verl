@@ -283,6 +283,10 @@ class FSDPActorConfig(ActorConfig):
     fsdp_config: FSDPEngineConfig = field(default_factory=FSDPEngineConfig)
     use_remove_padding: bool = False
     use_rollout_log_probs: bool = False
+    
+    # DP balance configuration
+    dp_balance_method: str = "multiway"  # Partition method: multiway, bucketed, greedy, karmarkar_karp, snake, snake_full
+    dp_num_buckets: Optional[int] = None  # Number of buckets for bucketed method (None = dp_size)
 
     def __post_init__(self):
         """Validate FSDP actor configuration parameters."""

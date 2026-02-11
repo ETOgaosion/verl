@@ -210,6 +210,70 @@ def greedy_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool
     return partitions
 
 
+def multiway_greedy_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool) -> list[list[int]]:
+    """Partition items into k groups using multiway greedy (LPT) assignment.
+
+    Sort items by value descending, then assign each item to the partition with
+    the smallest current sum. When equal_size=True, enforces a fixed number of
+    items per partition.
+
+    Args:
+        seqlen_list: Values to partition (typically sequence lengths or workloads).
+        k_partitions: Number of partitions to create.
+        equal_size: If True, enforces len(seqlen_list) / k_partitions items per partition.
+
+    Returns:
+        list[list[int]]: List of k partitions, each containing indices into seqlen_list.
+    """
+    assert k_partitions > 0, "k_partitions must be > 0"
+    assert len(seqlen_list) >= k_partitions, f"{len(seqlen_list)} < {k_partitions}"
+
+    if equal_size:
+        assert len(seqlen_list) % k_partitions == 0, f"{len(seqlen_list)} % {k_partitions} != 0"
+        target_size = len(seqlen_list) // k_partitions
+    else:
+        target_size = None
+
+    sorted_indices = sorted(range(len(seqlen_list)), key=lambda i: seqlen_list[i], reverse=True)
+    # heap item: (current_sum, current_count, partition_id, indices)
+    heap = [(0, 0, p, []) for p in range(k_partitions)]
+    heapq.heapify(heap)
+
+    for idx in sorted_indices:
+        temp = None
+        if target_size is None:
+            cur_sum, cur_count, p, items = heapq.heappop(heap)
+        else:
+            temp = []
+            cur_sum = cur_count = p = None
+            items = None
+            while heap:
+                cur_sum, cur_count, p, items = heapq.heappop(heap)
+                if cur_count < target_size:
+                    break
+                temp.append((cur_sum, cur_count, p, items))
+            if items is None or cur_count is None or cur_count >= target_size:
+                raise RuntimeError("Failed to assign partition in multiway_greedy_partition")
+
+        items.append(idx)
+        cur_sum += seqlen_list[idx]
+        cur_count += 1
+        heapq.heappush(heap, (cur_sum, cur_count, p, items))
+
+        if temp:
+            for entry in temp:
+                heapq.heappush(heap, entry)
+
+    heap.sort(key=lambda x: x[2])
+    partitions = [items for _, _, _, items in heap]
+
+    if target_size is not None:
+        for i, partition in enumerate(partitions):
+            assert len(partition) == target_size, f"partition {i} size {len(partition)} != {target_size}"
+
+    return partitions
+
+
 def snake_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool) -> list[list[int]]:
     """Partition indices using a snake (zig-zag) assignment over sorted values.
 
@@ -260,6 +324,154 @@ def snake_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool)
     return partitions
 
 
+def snake_partition_full(seqlen_list: list[int], k_partitions: int, equal_size: bool) -> list[list[int]]:
+    """Partition indices using a full symmetric snake pattern.
+
+    Uses 0→k-1→k-1→0 repeating, i.e. pattern length 2k with endpoints included.
+    """
+    assert k_partitions > 0, "k_partitions must be > 0"
+    assert len(seqlen_list) >= k_partitions, f"{len(seqlen_list)} < {k_partitions}"
+    if k_partitions == 1:
+        return [list(range(len(seqlen_list)))]
+
+    if equal_size:
+        assert len(seqlen_list) % k_partitions == 0, f"{len(seqlen_list)} % {k_partitions} != 0"
+        target_size = len(seqlen_list) // k_partitions
+    else:
+        target_size = None
+
+    sorted_pairs = sorted(enumerate(seqlen_list), key=lambda x: x[1], reverse=True)
+    partitions: list[list[int]] = [[] for _ in range(k_partitions)]
+
+    pattern = list(range(k_partitions)) + list(range(k_partitions - 1, -1, -1))
+    pattern_len = len(pattern)
+    ptr = 0
+
+    for orig_idx, _ in sorted_pairs:
+        attempts = 0
+        while True:
+            p = pattern[ptr % pattern_len]
+            ptr += 1
+            if target_size is None or len(partitions[p]) < target_size:
+                partitions[p].append(orig_idx)
+                break
+            attempts += 1
+            if attempts > k_partitions * 2:
+                raise RuntimeError("Failed to assign partition in snake_partition_full")
+
+    if target_size is not None:
+        for i, partition in enumerate(partitions):
+            assert len(partition) == target_size, f"partition {i} size {len(partition)} != {target_size}"
+
+    return partitions
+
+
+def stratified_balanced_partition(
+    seqlen_list: list[int],
+    k_partitions: int,
+    equal_size: bool,
+    num_buckets: int | None = None,
+) -> list[list[int]]:
+    """Balanced stratified partition ensuring distribution similarity across partitions.
+
+    This approach ensures each partition has SIMILAR workload distribution (not just total):
+    1. Divides sequences into equal-frequency workload tiers (buckets)
+    2. From each bucket, distributes items to partitions using workload-aware assignment
+    3. Each partition receives proportional representation from ALL tiers
+
+    Key insight: By ensuring each partition gets items from every workload tier,
+    we guarantee similar workload DISTRIBUTIONS, not just similar totals. This means:
+    - Similar kernel behavior across DP ranks (similar L² effects)
+    - Better micro-batch alignment when partitioned later
+    - More predictable execution times
+
+    Note: This function does NOT sort items within partitions. The micro-batch
+    ordering should be handled separately by rearrange_micro_batches() at runtime.
+
+    Args:
+        seqlen_list: Workload values to partition.
+        k_partitions: Number of DP partitions.
+        equal_size: Enforce equal number of items per partition.
+        num_buckets: Number of workload tiers. Defaults to k_partitions.
+
+    Returns:
+        list[list[int]]: List of k partitions, each containing indices into seqlen_list.
+        Items within each partition maintain their relative order from bucket assignment.
+    """
+    n = len(seqlen_list)
+    assert n >= k_partitions, f"number of items:[{n}] < k_partitions:[{k_partitions}]"
+
+    if equal_size:
+        assert n % k_partitions == 0, f"{n} % {k_partitions} != 0"
+        target_size = n // k_partitions
+    else:
+        target_size = None
+
+    # Determine number of buckets - more buckets = finer-grained distribution matching
+    if num_buckets is None:
+        num_buckets = k_partitions
+    # Ensure we have at least k items per bucket for meaningful distribution
+    num_buckets = max(1, min(num_buckets, n // k_partitions))
+
+    # Phase 1: Sort by workload descending
+    sorted_indices = sorted(range(n), key=lambda i: seqlen_list[i], reverse=True)
+
+    # Phase 2: Create equal-frequency buckets (workload tiers)
+    bucket_size = n // num_buckets
+    remainder = n % num_buckets
+
+    buckets: list[list[int]] = []
+    ptr = 0
+    for b in range(num_buckets):
+        cur_size = bucket_size + (1 if b < remainder else 0)
+        buckets.append(sorted_indices[ptr:ptr + cur_size])
+        ptr += cur_size
+
+    # Phase 3: For each bucket, distribute items to partitions using workload-aware greedy
+    # Track cumulative workload per partition across all buckets
+    partition_workloads = [0] * k_partitions
+    partitions: list[list[int]] = [[] for _ in range(k_partitions)]
+
+    for bucket in buckets:
+        # Sort bucket items by workload descending (LPT ordering within bucket)
+        bucket_sorted = sorted(bucket, key=lambda i: seqlen_list[i], reverse=True)
+
+        # Calculate quota per partition from this bucket
+        items_per_partition = len(bucket) // k_partitions
+        bucket_remainder = len(bucket) % k_partitions
+
+        # Use heap for workload-aware assignment
+        # heap item: (cumulative_workload, items_from_this_bucket, partition_id)
+        heap = [(partition_workloads[p], 0, p) for p in range(k_partitions)]
+        heapq.heapify(heap)
+
+        for idx in bucket_sorted:
+            # Find partition with minimum workload that hasn't reached its quota
+            temp = []
+            assigned = False
+            while heap and not assigned:
+                cur_workload, cur_bucket_count, p = heapq.heappop(heap)
+                quota = items_per_partition + (1 if p < bucket_remainder else 0)
+                if cur_bucket_count < quota:
+                    # Assign to this partition
+                    partitions[p].append(idx)
+                    partition_workloads[p] += seqlen_list[idx]
+                    heapq.heappush(heap, (partition_workloads[p], cur_bucket_count + 1, p))
+                    assigned = True
+                else:
+                    temp.append((cur_workload, cur_bucket_count, p))
+
+            # Restore temp items
+            for entry in temp:
+                heapq.heappush(heap, entry)
+
+    # NO Phase 4 sorting here!
+    # Micro-batch ordering is handled by rearrange_micro_batches() at runtime.
+    # Keeping distribution random within partitions preserves the tier diversity.
+
+    return partitions
+
+
 def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     """
     Calculates partitions of indices from seqlen_list such that the sum of sequence lengths
@@ -304,6 +516,155 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
     return _check_and_sort_partitions(partitions)
 
 
+def get_dp_balanced_partitions(
+    seqlen_list: list[int],
+    k_partitions: int,
+    equal_size: bool,
+    method: str = "multiway",
+    num_buckets: int | None = None,
+):
+    """Balance tokens across DP ranks using a configurable algorithm.
+
+    Args:
+        seqlen_list: Values to partition (typically workload or seqlen).
+        k_partitions: Number of DP partitions.
+        equal_size: Enforce equal number of items per partition.
+        method: Partitioning algorithm. Options:
+            - "multiway": Multiway greedy (LPT). Best for workload balance.
+            - "balanced": Stratified balanced. Best overall (balance + distribution + sync).
+            - "snake_full": Full symmetric snake pattern.
+            - "snake": Standard snake pattern.
+            - "greedy": Simple greedy assignment.
+            - "karmarkar_karp": Karmarkar-Karp differencing method.
+        num_buckets: Number of workload tiers for "balanced" method. Defaults to k_partitions.
+    """
+    assert len(seqlen_list) >= k_partitions, f"number of items:[{len(seqlen_list)}] < k_partitions:[{k_partitions}]"
+
+    if method == "multiway":
+        partitions = multiway_greedy_partition(seqlen_list, k_partitions, equal_size=equal_size)
+    elif method == "balanced":
+        partitions = stratified_balanced_partition(
+            seqlen_list, k_partitions, equal_size=equal_size, num_buckets=num_buckets
+        )
+    elif method == "snake_full":
+        partitions = snake_partition_full(seqlen_list, k_partitions, equal_size=equal_size)
+    elif method == "snake":
+        partitions = snake_partition(seqlen_list, k_partitions, equal_size=equal_size)
+    elif method == "greedy":
+        partitions = greedy_partition(seqlen_list, k_partitions, equal_size=equal_size)
+    elif method == "karmarkar_karp":
+        partitions = karmarkar_karp(seqlen_list, k_partitions, equal_size=equal_size)
+    else:
+        raise ValueError(f"Unknown dp balance method: {method}")
+
+    def _check_and_sort_partitions(partitions):
+        assert len(partitions) == k_partitions, f"{len(partitions)} != {k_partitions}"
+        seen_idx = set()
+        sorted_partitions = [None] * k_partitions
+        for i, partition in enumerate(partitions):
+            assert len(partition) > 0, f"the {i}-th partition is empty"
+            for idx in partition:
+                seen_idx.add(idx)
+            sorted_partitions[i] = sorted(partition)
+        assert seen_idx == set(range(len(seqlen_list)))
+        return sorted_partitions
+
+    return _check_and_sort_partitions(partitions)
+
+
+def get_bucketed_dp_partitions(
+    seqlen_list: list[int],
+    k_partitions: int,
+    equal_size: bool,
+    num_buckets: int | None = None,
+    method: str = "multiway",
+) -> list[list[int]]:
+    """Partition items into k groups using equal-frequency bucketing + per-bucket balancing.
+
+    This approach ensures cross-DP token consistency by:
+    1. Sorting items by workload and dividing into equal-frequency buckets
+    2. Within each bucket, using multiway greedy to distribute items to k partitions
+    3. Merging bucket results so each partition has items from all workload tiers
+
+    Args:
+        seqlen_list: Values to partition (typically workload or seqlen).
+        k_partitions: Number of DP partitions.
+        equal_size: Enforce equal number of items per partition.
+        num_buckets: Number of workload buckets. Defaults to k_partitions if None.
+        method: Partitioning algorithm for each bucket: "multiway" | "snake_full".
+
+    Returns:
+        list[list[int]]: List of k partitions, each containing indices into seqlen_list.
+    """
+    n = len(seqlen_list)
+    assert n >= k_partitions, f"number of items:[{n}] < k_partitions:[{k_partitions}]"
+
+    if num_buckets is None:
+        num_buckets = k_partitions
+    num_buckets = min(num_buckets, n // k_partitions)  # ensure each bucket has >= k items
+    num_buckets = max(1, num_buckets)
+
+    # Sort indices by workload descending
+    sorted_indices = sorted(range(n), key=lambda i: seqlen_list[i], reverse=True)
+
+    # Equal-frequency bucketing
+    bucket_size = n // num_buckets
+    remainder = n % num_buckets
+    buckets: list[list[int]] = []
+    ptr = 0
+    for b in range(num_buckets):
+        # Distribute remainder across first buckets
+        cur_size = bucket_size + (1 if b < remainder else 0)
+        buckets.append(sorted_indices[ptr : ptr + cur_size])
+        ptr += cur_size
+
+    # Initialize partitions
+    partitions: list[list[int]] = [[] for _ in range(k_partitions)]
+
+    # For each bucket, partition items into k groups and merge
+    for bucket in buckets:
+        if len(bucket) < k_partitions:
+            # If bucket is too small, distribute one item per partition round-robin
+            for i, idx in enumerate(bucket):
+                partitions[i % k_partitions].append(idx)
+            continue
+
+        bucket_workloads = [seqlen_list[idx] for idx in bucket]
+
+        if method == "multiway":
+            bucket_partitions = multiway_greedy_partition(
+                bucket_workloads, k_partitions, equal_size=False
+            )
+        elif method == "snake_full":
+            bucket_partitions = snake_partition_full(
+                bucket_workloads, k_partitions, equal_size=False
+            )
+        else:
+            bucket_partitions = multiway_greedy_partition(
+                bucket_workloads, k_partitions, equal_size=False
+            )
+
+        # Map back to original indices and merge
+        for p in range(k_partitions):
+            for local_idx in bucket_partitions[p]:
+                partitions[p].append(bucket[local_idx])
+
+    # Validate and sort
+    def _check_and_sort_partitions(partitions):
+        assert len(partitions) == k_partitions, f"{len(partitions)} != {k_partitions}"
+        seen_idx = set()
+        sorted_partitions = [None] * k_partitions
+        for i, partition in enumerate(partitions):
+            assert len(partition) > 0, f"the {i}-th partition is empty"
+            for idx in partition:
+                seen_idx.add(idx)
+            sorted_partitions[i] = sorted(partition)
+        assert seen_idx == set(range(n)), f"Missing or duplicate indices"
+        return sorted_partitions
+
+    return _check_and_sort_partitions(partitions)
+
+
 def log_seqlen_unbalance(seqlen_list: list[int], partitions: list[list[int]], prefix):
     """
     Calculate and log metrics related to sequence length imbalance before and after partitioning.
@@ -342,14 +703,140 @@ def log_seqlen_unbalance(seqlen_list: list[int], partitions: list[list[int]], pr
     min_sum_seqlen_balanced = min(balanced_sum_seqlen_list)
     max_sum_seqlen_balanced = max(balanced_sum_seqlen_list)
 
+    # Helper to convert tensor/numpy values to Python native types for logging
+    def to_python(val):
+        if hasattr(val, 'item'):
+            return val.item()  # PyTorch tensor or numpy scalar
+        return val
+
     return {
-        f"{prefix}/min": min_sum_seqlen,
-        f"{prefix}/max": max_sum_seqlen,
-        f"{prefix}/minmax_diff": max_sum_seqlen - min_sum_seqlen,
-        f"{prefix}/balanced_min": min_sum_seqlen_balanced,
-        f"{prefix}/balanced_max": max_sum_seqlen_balanced,
-        f"{prefix}/mean": total_sum_seqlen / len(partitions),
+        f"{prefix}/min": to_python(min_sum_seqlen),
+        f"{prefix}/max": to_python(max_sum_seqlen),
+        f"{prefix}/minmax_diff": to_python(max_sum_seqlen - min_sum_seqlen),
+        f"{prefix}/balanced_min": to_python(min_sum_seqlen_balanced),
+        f"{prefix}/balanced_max": to_python(max_sum_seqlen_balanced),
+        f"{prefix}/mean": to_python(total_sum_seqlen) / len(partitions),
     }
+
+
+def analyze_cross_dp_micro_batch_balance(
+    dp_partitions: list[list[int]],
+    workload_list: list[float],
+    micro_batch_size: int | None = None,
+    prefix: str = "cross_dp_mb",
+) -> dict:
+    """
+    Analyze workload balance across DP ranks for same-index micro-batches.
+    
+    This function simulates how micro-batches would be formed on each DP rank
+    and checks if same-index micro-batches have similar workloads across ranks.
+    This is critical for reducing synchronization overhead in data parallel training.
+    
+    Args:
+        dp_partitions: List of DP partitions, each containing indices into workload_list.
+        workload_list: Workload value for each sample.
+        micro_batch_size: Fixed size for micro-batches. If None, analyzes variable-sized batches.
+        prefix: Prefix for metric keys in returned dictionary.
+        
+    Returns:
+        dict: Metrics including:
+            - {prefix}/num_micro_batches: Number of micro-batches per DP rank
+            - {prefix}/mb{i}_std: Standard deviation of workload for micro-batch i across DP ranks
+            - {prefix}/mb{i}_cv: Coefficient of variation (std/mean) for micro-batch i
+            - {prefix}/avg_std: Average std across all micro-batch indices
+            - {prefix}/avg_cv: Average coefficient of variation
+            - {prefix}/max_std: Maximum std (worst case synchronization delay)
+            - {prefix}/sync_efficiency: 1 - (avg_cv), higher is better (closer to 1.0)
+            
+    Example:
+        >>> # 8 DP ranks, each with 16 samples
+        >>> dp_partitions = [list(range(i*16, (i+1)*16)) for i in range(8)]
+        >>> workloads = [random.randint(100, 500) for _ in range(128)]
+        >>> metrics = analyze_cross_dp_micro_batch_balance(dp_partitions, workloads, micro_batch_size=4)
+        >>> print(f"Sync efficiency: {metrics['cross_dp_mb/sync_efficiency']:.2%}")
+    """
+    import numpy as np
+    
+    num_dp_ranks = len(dp_partitions)
+    metrics = {}
+    
+    # Simulate micro-batch formation on each DP rank
+    dp_micro_batches = []  # [dp_rank][mb_index] -> workload
+    min_num_mbs = float('inf')
+    max_num_mbs = 0
+    
+    for rank_idx, partition in enumerate(dp_partitions):
+        rank_workloads = [workload_list[i] for i in partition]
+        
+        if micro_batch_size is not None:
+            # Fixed-size micro-batches
+            num_mbs = len(rank_workloads) // micro_batch_size
+            mb_workloads = []
+            for mb_idx in range(num_mbs):
+                start = mb_idx * micro_batch_size
+                end = start + micro_batch_size
+                mb_total = sum(rank_workloads[start:end])
+                mb_workloads.append(mb_total)
+        else:
+            # Variable-sized: each sample is its own micro-batch (for analysis)
+            mb_workloads = rank_workloads
+        
+        dp_micro_batches.append(mb_workloads)
+        min_num_mbs = min(min_num_mbs, len(mb_workloads))
+        max_num_mbs = max(max_num_mbs, len(mb_workloads))
+    
+    metrics[f"{prefix}/num_micro_batches"] = min_num_mbs
+    metrics[f"{prefix}/num_micro_batches_max"] = max_num_mbs
+    
+    if min_num_mbs == 0:
+        metrics[f"{prefix}/warning"] = "No micro-batches formed"
+        return metrics
+    
+    # Analyze each micro-batch index across DP ranks
+    mb_stds = []
+    mb_cvs = []  # Coefficient of variation: std/mean
+    
+    for mb_idx in range(min_num_mbs):
+        # Collect workload for this micro-batch index across all DP ranks
+        mb_workloads_across_ranks = [
+            dp_micro_batches[rank_idx][mb_idx] 
+            for rank_idx in range(num_dp_ranks)
+            if mb_idx < len(dp_micro_batches[rank_idx])
+        ]
+        
+        if len(mb_workloads_across_ranks) < 2:
+            continue
+            
+        mean_workload = np.mean(mb_workloads_across_ranks)
+        std_workload = np.std(mb_workloads_across_ranks)
+        cv = std_workload / mean_workload if mean_workload > 0 else 0
+        
+        mb_stds.append(std_workload)
+        mb_cvs.append(cv)
+        
+        # Store per-micro-batch metrics (limit to first 10 for brevity)
+        if mb_idx < 10:
+            metrics[f"{prefix}/mb{mb_idx}_mean"] = float(mean_workload)
+            metrics[f"{prefix}/mb{mb_idx}_std"] = float(std_workload)
+            metrics[f"{prefix}/mb{mb_idx}_cv"] = float(cv)
+            metrics[f"{prefix}/mb{mb_idx}_min"] = float(min(mb_workloads_across_ranks))
+            metrics[f"{prefix}/mb{mb_idx}_max"] = float(max(mb_workloads_across_ranks))
+    
+    # Aggregate metrics
+    if mb_stds:
+        metrics[f"{prefix}/avg_std"] = float(np.mean(mb_stds))
+        metrics[f"{prefix}/max_std"] = float(np.max(mb_stds))
+        metrics[f"{prefix}/min_std"] = float(np.min(mb_stds))
+    
+    if mb_cvs:
+        avg_cv = float(np.mean(mb_cvs))
+        metrics[f"{prefix}/avg_cv"] = avg_cv
+        metrics[f"{prefix}/max_cv"] = float(np.max(mb_cvs))
+        metrics[f"{prefix}/min_cv"] = float(np.min(mb_cvs))
+        # Sync efficiency: higher is better, 1.0 means perfect balance
+        metrics[f"{prefix}/sync_efficiency"] = max(0.0, 1.0 - avg_cv)
+    
+    return metrics
 
 
 def ceildiv(a: int, b: int) -> int:
@@ -403,6 +890,7 @@ def rearrange_micro_batches(
     same_micro_num_in_dp=True,
     min_num_micro_batch=None,
     use_dynamic_bsz_balance=True,
+    align_cross_dp: bool = False,
 ):
     """
     Split a batch into micro-batches by total token count, with optional DP sync and padding.
@@ -414,7 +902,10 @@ def rearrange_micro_batches(
         num_batches_divided_by (optional): virtual pipeline parallel size, for megatron.
         same_micro_num_in_dp (bool): if True and dp_group set, pad all ranks to the same count.
         min_num_micro_batch (int, optional): force at least this many splits (pads empty ones).
-        use_dynamic_bsz_balance (bool, optional): balance the computational workload between micro-batches
+        use_dynamic_bsz_balance (bool, optional): balance the computational workload between micro-batches.
+        align_cross_dp (bool, optional): if True, sort micro-batches strictly by workload descending
+            to ensure same-index micro-batches across DP ranks have similar workloads. This improves
+            cross-DP synchronization but may increase warm-up/cool-down bubbles.
 
     Returns:
         List[TensorDict]: the micro-batches.
@@ -460,8 +951,13 @@ def rearrange_micro_batches(
             ),
             reverse=True,
         )
-        # Place smaller micro-batches at both ends to reduce the bubbles exposed during the warm-up and cool-down.
-        micro_bsz_idx = micro_bsz_idx[::2][::-1] + micro_bsz_idx[1::2]
+        if align_cross_dp:
+            # Keep strict descending order for cross-DP alignment.
+            # All DP ranks use the same sorting rule, so same-index MBs have similar workloads.
+            pass
+        else:
+            # Place smaller micro-batches at both ends to reduce the bubbles exposed during the warm-up and cool-down.
+            micro_bsz_idx = micro_bsz_idx[::2][::-1] + micro_bsz_idx[1::2]
 
     micro_batches = []
 
@@ -498,6 +994,7 @@ def prepare_dynamic_batch(
     same_micro_num_in_dp=True,
     min_num_micro_batch=None,
     use_dynamic_bsz_balance=True,
+    align_cross_dp: bool = False,
 ) -> tuple[list[DataProto], list[list[int]]]:
     """
     Prepare a batch for dynamic batching.
@@ -505,6 +1002,8 @@ def prepare_dynamic_batch(
     Args:
         data (DataProto): The input data.
         max_token_len (int): The maximum token length for dynamic batching.
+        align_cross_dp (bool, optional): if True, sort micro-batches strictly by workload descending
+            to ensure same-index micro-batches across DP ranks have similar workloads.
 
     Returns:
         Tuple[List[DataProto], List[List[int]]]: A tuple containing a list of DataProto objects
@@ -518,6 +1017,7 @@ def prepare_dynamic_batch(
         same_micro_num_in_dp=same_micro_num_in_dp,
         min_num_micro_batch=min_num_micro_batch,
         use_dynamic_bsz_balance=use_dynamic_bsz_balance,
+        align_cross_dp=align_cross_dp,
     )
     micro_batches = []
     for i, batch_idx in enumerate(batch_idx_list):
