@@ -21,7 +21,7 @@ This trainer supports model-agonistic model initialization with huggingface
 import json
 import os
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pprint import pprint
@@ -1289,6 +1289,11 @@ class RayPPOTrainer:
 
         self.global_steps = 0
 
+        # Pipeline Bubble Ratio tracking (方案B: 追踪update_actor绝对耗时)
+        # 用于验证负载均衡优化对流水线气泡的改进效果
+        # 使用 deque(maxlen) 实现 O(1) 滑动窗口，避免 list.pop(0) 的 O(N) 开销
+        self.update_actor_time_tracker = deque(maxlen=100)
+
         # load checkpoint before doing anything
         self._load_checkpoint()
 
@@ -1617,6 +1622,31 @@ class RayPPOTrainer:
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
+                
+                # Pipeline Bubble Ratio 实验指标 (方案B)
+                # 追踪 update_actor 的绝对耗时变化来反证气泡减少
+                if 'update_actor' in timing_raw:
+                    update_actor_time_ms = timing_raw['update_actor'] * 1000
+                    
+                    # 添加到滑动窗口 (deque自动处理maxlen，O(1)复杂度)
+                    self.update_actor_time_tracker.append(update_actor_time_ms)
+                    
+                    # 计算统计指标 (仅在窗口有数据时)
+                    if len(self.update_actor_time_tracker) > 0:
+                        times_array = np.array(self.update_actor_time_tracker)
+                        metrics.update({
+                            # 当前步的绝对时间
+                            'pipeline/update_actor_time_ms': update_actor_time_ms,
+                            
+                            # 滑动窗口统计 (用于实验对比)
+                            'pipeline/update_actor_time_ms_mean': float(np.mean(times_array)),
+                            'pipeline/update_actor_time_ms_std': float(np.std(times_array)),
+                            'pipeline/update_actor_time_ms_min': float(np.min(times_array)),
+                            'pipeline/update_actor_time_ms_max': float(np.max(times_array)),
+                            
+                            # 变异系数 (CV = std/mean)，越小说明越稳定
+                            'pipeline/update_actor_cv': float(np.std(times_array) / np.mean(times_array)) if np.mean(times_array) > 0 else 0.0,
+                        })
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
