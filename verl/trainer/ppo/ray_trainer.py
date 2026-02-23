@@ -59,13 +59,7 @@ from verl.utils.import_utils import load_class_from_fqn
 from verl.utils.metric import reduce_metrics
 from verl.utils.py_functional import rename_dict
 from verl.utils.rollout_skip import RolloutSkip
-from verl.utils.seqlen_balancing import (
-    calculate_workload,
-    get_bucketed_dp_partitions,
-    get_dp_balanced_partitions,
-    get_seqlen_balanced_partitions,
-    log_seqlen_unbalance,
-)
+from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 from verl.workers.config import FSDPEngineConfig
@@ -1110,7 +1104,7 @@ class RayPPOTrainer:
         return max(dp_rank_mapping) + 1
 
     def _balance_batch(self, batch: DataProto, metrics, logging_prefix="global_seqlen", keep_minibatch=False):
-        """Reorder the data on single controller such that each dp rank gets similar total tokens."""
+        """Reorder the data on single controller such that each dp rank gets similar total tokens"""
         attention_mask = batch.batch["attention_mask"]
         batch_size = attention_mask.shape[0]
         global_seqlen_lst = batch.batch["attention_mask"].view(batch_size, -1).sum(-1)  # (train_batch_size,)
@@ -1118,47 +1112,21 @@ class RayPPOTrainer:
         # Get dp_size from dispatch info to correctly balance across data parallel ranks
         # Note: world_size may include tensor/pipeline parallel dimensions, but we only want DP
         dp_size = self._get_dp_size(self.actor_rollout_wg, "actor")
-        dp_balance_method = self.config.actor_rollout_ref.actor.get("dp_balance_method", "multiway")
-        # Number of buckets for bucketed partitioning (only used when dp_balance_method="bucketed")
-        dp_num_buckets = self.config.actor_rollout_ref.actor.get("dp_num_buckets", dp_size)
-
         if keep_minibatch:
             # Decouple the DP balancing and mini-batching.
             minibatch_size = self.config.actor_rollout_ref.actor.get("ppo_mini_batch_size")
             minibatch_num = len(workload_lst) // minibatch_size
             global_partition_lst = [[] for _ in range(dp_size)]
             for i in range(minibatch_num):
-                if dp_balance_method == "bucketed":
-                    rearrange_minibatch_lst = get_bucketed_dp_partitions(
-                        workload_lst[i * minibatch_size : (i + 1) * minibatch_size],
-                        k_partitions=dp_size,
-                        equal_size=True,
-                        num_buckets=dp_num_buckets,
-                    )
-                else:
-                    rearrange_minibatch_lst = get_dp_balanced_partitions(
-                        workload_lst[i * minibatch_size : (i + 1) * minibatch_size],
-                        k_partitions=dp_size,
-                        equal_size=True,
-                        method=dp_balance_method,
-                    )
+                rearrange_minibatch_lst = get_seqlen_balanced_partitions(
+                    workload_lst[i * minibatch_size : (i + 1) * minibatch_size],
+                    k_partitions=dp_size,
+                    equal_size=True,
+                )
                 for j, part in enumerate(rearrange_minibatch_lst):
                     global_partition_lst[j].extend([x + minibatch_size * i for x in part])
         else:
-            if dp_balance_method == "bucketed":
-                global_partition_lst = get_bucketed_dp_partitions(
-                    workload_lst,
-                    k_partitions=dp_size,
-                    equal_size=True,
-                    num_buckets=dp_num_buckets,
-                )
-            else:
-                global_partition_lst = get_dp_balanced_partitions(
-                    workload_lst,
-                    k_partitions=dp_size,
-                    equal_size=True,
-                    method=dp_balance_method,
-                )
+            global_partition_lst = get_seqlen_balanced_partitions(workload_lst, k_partitions=dp_size, equal_size=True)
         # Place smaller micro-batches at both ends to reduce the bubbles in pipeline parallel.
         for idx, partition in enumerate(global_partition_lst):
             partition.sort(key=lambda x: (workload_lst[x], x))
@@ -1171,20 +1139,6 @@ class RayPPOTrainer:
             seqlen_list=global_seqlen_lst, partitions=global_partition_lst, prefix=logging_prefix
         )
         metrics.update(global_balance_stats)
-        
-        # Debug: Print balance stats to verify
-        print(f"[DEBUG] DP Balance stats added to metrics: {list(global_balance_stats.keys())}")
-        
-        # Log DP balance details to console for verification
-        if logging_prefix == "global_seqlen":
-            import logging
-            logger = logging.getLogger(__name__)
-            partition_tokens = [sum(global_seqlen_lst[i] for i in partition) for partition in global_partition_lst]
-            print(f"[DP Balance] Method={dp_balance_method}, Partitions={len(global_partition_lst)}")
-            print(f"[DP Balance] Tokens per rank: min={min(partition_tokens)}, max={max(partition_tokens)}, "
-                  f"mean={sum(partition_tokens)/len(partition_tokens):.1f}, std={np.std(partition_tokens):.1f}")
-            print(f"[DP Balance] Imbalance: {max(partition_tokens)-min(partition_tokens)} tokens "
-                  f"({(max(partition_tokens)-min(partition_tokens))*100/np.mean(partition_tokens):.2f}%)")
 
     def _compute_values(self, batch: DataProto) -> DataProto:
         if self.use_legacy_worker_impl == "disable":
