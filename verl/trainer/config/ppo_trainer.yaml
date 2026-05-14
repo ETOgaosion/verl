@@ -197,6 +197,9 @@ trainer:
   # Device to run training on (e.g., "cuda", "cpu")
   device: cuda
 
+  # Cross-venv runtime spec for trainer Ray actors; null inherits the driver's interpreter
+  venv: null
+
 # profiler configs
 global_profiler:
 

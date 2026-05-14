@@ -98,6 +98,7 @@ from verl.utils.ray_utils import auto_await
 from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
 from verl.utils.tracking import Tracking, ValidationGenerationsLogger
+from verl.utils.venv import resolve_py_executable
 from verl.workers.config import CriticConfig, DistillationConfig
 from verl.workers.engine_workers import ActorRolloutRefWorker, TrainingWorker, TrainingWorkerConfig
 from verl.workers.rollout.llm_server import LLMServerManager
@@ -621,6 +622,13 @@ class PPOTrainer:
                     OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
                 )
         wg_kwargs["device_name"] = self.config.trainer.device
+        # Cross-venv runtime: route trainer actors at the training venv when
+        # ``trainer.venv`` is set (only meaningful in disaggregated mode —
+        # in hybrid/colocated mode actor+rollout share an actor and must
+        # therefore share a venv).
+        trainer_py_executable = resolve_py_executable(OmegaConf.select(self.config.trainer, "venv"), role="trainer")
+        if trainer_py_executable is not None:
+            wg_kwargs["worker_py_executable"] = trainer_py_executable
         logger.info(f"worker group kwargs: {wg_kwargs}")
 
         for resource_pool, class_dict in self.resource_pool_to_cls.items():
