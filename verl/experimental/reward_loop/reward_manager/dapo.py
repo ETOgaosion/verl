@@ -31,7 +31,8 @@ class DAPORewardManager(RewardManagerBase):
 
         # DAPO Reward Config
         overlong_buffer_cfg = config.reward.get("reward_kwargs", {}).get("overlong_buffer_cfg", None)
-        self.overlong_buffer_cfg = overlong_buffer_cfg
+        self.
+        overlong_buffer_cfg = overlong_buffer_cfg
         self.max_resp_len = config.reward.get("reward_kwargs", {}).get("max_resp_len", None)
         self.reward_router_address = reward_router_address
         self.reward_model_tokenizer = reward_model_tokenizer

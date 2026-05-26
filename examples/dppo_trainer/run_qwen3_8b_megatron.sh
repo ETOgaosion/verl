@@ -18,10 +18,10 @@ clip_ratio_low=${CLIP_LOW:-$CLIP_DEFAULT}
 clip_ratio_high=${CLIP_HIGH:-$CLIP_DEFAULT}
 
 train_batch_size=${TRAIN_BATCH_SIZE:-256}
-ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-32}
+ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-48}
 max_prompt_length=${MAX_PROMPT_LENGTH:-2048}
 max_response_length=${MAX_RESPONSE_LENGTH:-8192}
-ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-30720}
+ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-$((32 * 1024))}
 
 actor_lr=${ACTOR_LR:-1e-6}
 entropy_coeff=${ENTROPY_COEFF:-0}
@@ -74,6 +74,8 @@ DATA=(
     algorithm.norm_adv_by_std_in_grpo=False
     data.train_files="['$train_file']"
     data.val_files="${val_files_str}"
+    data.prompt_key="prompt"
+    data.reward_fn_key="data_source"
     data.train_batch_size=${train_batch_size}
     data.max_prompt_length=${max_prompt_length}
     data.max_response_length=${max_response_length}
@@ -86,6 +88,9 @@ DATA=(
 MODEL=(
     actor_rollout_ref.model.path="$MODEL_PATH"
     actor_rollout_ref.model.use_remove_padding=True
+    actor_rollout_ref.model.use_liger=False
+    actor_rollout_ref.model.use_fused_kernels=True
+    actor_rollout_ref.model.fused_kernel_options.impl_backend=triton
 )
 
 ACTOR=(
@@ -95,6 +100,9 @@ ACTOR=(
     actor_rollout_ref.actor.clip_ratio_high=${clip_ratio_high}
     actor_rollout_ref.actor.clip_ratio_c=10000.0
     actor_rollout_ref.actor.optim.lr=${actor_lr}
+    actor_rollout_ref.actor.optim.lr_warmup_steps=10
+    actor_rollout_ref.actor.optim.weight_decay=0.1
+    actor_rollout_ref.actor.optim.clip_grad=1.0
     actor_rollout_ref.actor.ppo_mini_batch_size=${ppo_mini_batch_size}
     actor_rollout_ref.actor.use_dynamic_bsz=True
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${ppo_max_token_len_per_gpu}
@@ -155,6 +163,7 @@ EXTRA=(
     +reward.reward_kwargs.overlong_buffer_cfg.len=${OVERLONG_BUFFER_LEN} \
     +reward.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_buffer_penalty_factor} \
     +reward.reward_kwargs.overlong_buffer_cfg.log=${overlong_buffer_log} \
+    +reward.reward_kwargs.max_resp_len=${max_response_length} \
     custom_reward_function.path="${custom_verify_fn_src_path}"
     custom_reward_function.name="${custom_verify_fn_name}"
 )
