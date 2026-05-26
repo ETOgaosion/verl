@@ -2,8 +2,8 @@ from verl.utils.dataset.rl_dataset import RLHFDataset
 
 
 class BoxedRLHFDataset(RLHFDataset):
-    def _build_messages(self, example: dict):
-        messages = super()._build_messages(example)
+    def _build_messages(self, example: dict, key: str):
+        messages = super()._build_messages(example, key)
 
         last_user_msg = messages[-1]
         assert last_user_msg["role"] == "user"
