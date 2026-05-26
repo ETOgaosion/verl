@@ -150,7 +150,7 @@ TRAINER=(
 
 EXTRA=(
     model_engine=megatron
-    +reward.reward_manager.name=${reward_manager} \
+    reward.reward_manager.name=${reward_manager} \
     +reward.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
     +reward.reward_kwargs.overlong_buffer_cfg.len=${OVERLONG_BUFFER_LEN} \
     +reward.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_buffer_penalty_factor} \
