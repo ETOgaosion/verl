@@ -54,6 +54,18 @@ for f in "${val_file[@]}"; do
     val_files_str+="'$f',"
 done
 val_files_str="${val_files_str%,}]"
+
+custom_verify_fn_src_path="examples/rewards/custome_reward_fn/math_dapo.py"
+custom_verify_fn_name="compute_score_math_dapo_boxed"
+custom_dataset_src_path="examples/rewards/custom_dataset/boxed.py"
+custom_dataset_name="BoxedRLHFDataset"
+
+reward_manager="dapo"
+enable_overlong_buffer=True
+OVERLONG_BUFFER_LEN=${OVERLONG_BUFFER_LEN:-"1024"}
+overlong_buffer_penalty_factor=1.0
+overlong_buffer_log=True
+
 ########################### parameter arrays ###########################
 
 DATA=(
@@ -67,6 +79,8 @@ DATA=(
     data.max_response_length=${max_response_length}
     data.filter_overlong_prompts=True
     data.truncation='error'
+    data.custom_cls.path="${custom_dataset_src_path}"
+    data.custom_cls.name="${custom_dataset_name}"
 )
 
 MODEL=(
@@ -136,6 +150,13 @@ TRAINER=(
 
 EXTRA=(
     model_engine=megatron
+    +reward.reward_manager.name=${reward_manager} \
+    +reward.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
+    +reward.reward_kwargs.overlong_buffer_cfg.len=${OVERLONG_BUFFER_LEN} \
+    +reward.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_buffer_penalty_factor} \
+    +reward.reward_kwargs.overlong_buffer_cfg.log=${overlong_buffer_log} \
+    custom_reward_function.path="${custom_verify_fn_src_path}"
+    custom_reward_function.name="${custom_verify_fn_name}"
 )
 
 ########################### launch ###########################
