@@ -18,7 +18,7 @@ clip_ratio_low=${CLIP_LOW:-$CLIP_DEFAULT}
 clip_ratio_high=${CLIP_HIGH:-$CLIP_DEFAULT}
 
 train_batch_size=${TRAIN_BATCH_SIZE:-256}
-ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-48}
+ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-32}
 max_prompt_length=${MAX_PROMPT_LENGTH:-2048}
 max_response_length=${MAX_RESPONSE_LENGTH:-8192}
 ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-$((32 * 1024))}
