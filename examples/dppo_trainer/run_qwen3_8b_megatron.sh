@@ -4,7 +4,8 @@ MODEL_PATH=${MODEL_PATH:-/mnt/hdfs/gaoziyuan/models/Qwen/Qwen3-8B-Base}
 NNODES=${NNODES:-1}
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-8}
 
-WANDB_API_KEY=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
+export WANDB_API_KEY=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
+export WANDB_DIR=/mnt/hdfs/gaoziyuan/wandb/verl_async_exp/verl_sync_qwen3_8b_dppo_tv_vllm_megatron/1node
 
 # LOSS_MODE selects DPPO variant: dppo_tv | dppo_kl (or vanilla for GRPO baseline)
 LOSS_MODE=${LOSS_MODE:-dppo_tv}
