@@ -1,11 +1,15 @@
 
 # ---- user-adjustable ----
 MODEL_PATH=${MODEL_PATH:-/mnt/hdfs/gaoziyuan/models/Qwen/Qwen3-8B-Base}
-NNODES=${NNODES:-1}
+NNODES=${NNODES:-4}
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-8}
 
+sudo pip uninstall -y byted-wandb
+sudo pip install wandb==0.24.1
 export WANDB_API_KEY=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
-export WANDB_DIR=/mnt/hdfs/gaoziyuan/wandb/verl_async_exp/verl_sync_qwen3_8b_dppo_tv_vllm_megatron/1node
+export WANDB_DIR=/mnt/hdfs/gaoziyuan/wandb/dppo/Qwen/Qwen3-8B-Base
+
+wandb login
 
 # LOSS_MODE selects DPPO variant: dppo_tv | dppo_kl (or vanilla for GRPO baseline)
 LOSS_MODE=${LOSS_MODE:-dppo_tv}
@@ -43,29 +47,17 @@ project_name=${PROJECT_NAME:-verl_async_exp}
 experiment_name=${EXPERIMENT_NAME:-verl_sync_qwen3_8b_${LOSS_MODE}_vllm_megatron}
 # ---- end user-adjustable ----
 
-train_file=${TRAIN_FILE:-/mnt/hdfs/gaoziyuan/data/dapo/dapo-math-17k.parquet}
+train_file=${TRAIN_FILE:-/mnt/hdfs/gaoziyuan/data/dapo/dapo-math-unique-clean-17k.parquet}
 val_file=()
-val_file+=("/mnt/hdfs/gaoziyuan/data/dapo/aime-2024.parquet")
+val_file+=("/mnt/hdfs/gaoziyuan/data/dapo/aime-2024-clean.parquet")
 val_file+=("/mnt/hdfs/gaoziyuan/data/dapo/aime-2025-1-verl.parquet")
 val_file+=("/mnt/hdfs/gaoziyuan/data/dapo/aime-2025-2-verl.parquet")
-val_file+=("/mnt/hdfs/gaoziyuan/data/dapo/math_lv3to5_test.parquet")
 
 val_files_str="["
 for f in "${val_file[@]}"; do
     val_files_str+="'$f',"
 done
 val_files_str="${val_files_str%,}]"
-
-custom_verify_fn_src_path="examples/rewards/custome_reward_fn/math_dapo.py"
-custom_verify_fn_name="compute_score_math_dapo_boxed"
-custom_dataset_src_path="examples/rewards/custom_dataset/boxed.py"
-custom_dataset_name="BoxedRLHFDataset"
-
-reward_manager="dapo"
-enable_overlong_buffer=True
-OVERLONG_BUFFER_LEN=${OVERLONG_BUFFER_LEN:-"1024"}
-overlong_buffer_penalty_factor=1.0
-overlong_buffer_log=True
 
 ########################### parameter arrays ###########################
 
@@ -82,8 +74,6 @@ DATA=(
     data.max_response_length=${max_response_length}
     data.filter_overlong_prompts=True
     data.truncation='error'
-    data.custom_cls.path="${custom_dataset_src_path}"
-    data.custom_cls.name="${custom_dataset_name}"
 )
 
 MODEL=(
@@ -154,19 +144,12 @@ TRAINER=(
     trainer.save_freq=${save_freq}
     trainer.test_freq=${test_freq}
     trainer.total_epochs=${total_epochs}
+    trainer.resume_mode=disable
     +trainer.wandb_proxy=http://sys-proxy-rd-relay.byted.org:8118
 )
 
 EXTRA=(
     model_engine=megatron
-    reward.reward_manager.name=${reward_manager} \
-    +reward.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
-    +reward.reward_kwargs.overlong_buffer_cfg.len=${OVERLONG_BUFFER_LEN} \
-    +reward.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_buffer_penalty_factor} \
-    +reward.reward_kwargs.overlong_buffer_cfg.log=${overlong_buffer_log} \
-    +reward.reward_kwargs.max_resp_len=${max_response_length} \
-    custom_reward_function.path="${custom_verify_fn_src_path}"
-    custom_reward_function.name="${custom_verify_fn_name}"
 )
 
 ########################### launch ###########################
