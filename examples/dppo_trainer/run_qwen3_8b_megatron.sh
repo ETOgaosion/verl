@@ -59,6 +59,9 @@ for f in "${val_file[@]}"; do
 done
 val_files_str="${val_files_str%,}]"
 
+custom_verify_fn_src_path=examples/rewards/custome_reward_fn/math_dapo.py
+custom_verify_fn_name=compute_score_math_dapo_boxed
+
 ########################### parameter arrays ###########################
 
 DATA=(
@@ -150,6 +153,8 @@ TRAINER=(
 
 EXTRA=(
     model_engine=megatron
+    custom_reward_function.path="${custom_verify_fn_src_path}"
+    custom_reward_function.name="${custom_verify_fn_name}"
 )
 
 ########################### launch ###########################
