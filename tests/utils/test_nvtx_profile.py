@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import socket
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -47,6 +50,48 @@ class TestProfilerConfig(unittest.TestCase):
                 _ = profiler_config.non_existing_key
             assert config.get("non_existing_key") == profiler_config.get("non_existing_key")
             assert config.get("non_existing_key", 1) == profiler_config.get("non_existing_key", 1)
+
+    def test_finish_hook_field_defaults_and_validation(self):
+        """Finish-hook fields default to disabled and validate their types."""
+        config = ProfilerConfig()
+        self.assertFalse(config.relocate_results)
+        self.assertIsNone(config.finish_hook_cmd)
+        self.assertFalse(config.finish_hook_all_ranks)
+        self.assertEqual(list(config.finish_hook_ranks), [])
+
+        with self.assertRaises(AssertionError):
+            ProfilerConfig(finish_hook_cmd=123)
+        with self.assertRaises(AssertionError):
+            ProfilerConfig(finish_hook_ranks="0,1")
+
+    def test_union_intersect_carry_finish_hook_fields(self):
+        """union/intersect must propagate the finish-hook fields."""
+        a = ProfilerConfig(
+            tool="nsys",
+            relocate_results=True,
+            finish_hook_cmd="cmd_a",
+            finish_hook_all_ranks=False,
+            finish_hook_ranks=[0, 1],
+        )
+        b = ProfilerConfig(
+            tool="nsys",
+            relocate_results=False,
+            finish_hook_cmd=None,
+            finish_hook_all_ranks=True,
+            finish_hook_ranks=[1, 2],
+        )
+
+        union = a.union(b)
+        self.assertTrue(union.relocate_results)
+        self.assertEqual(union.finish_hook_cmd, "cmd_a")
+        self.assertTrue(union.finish_hook_all_ranks)
+        self.assertEqual(set(union.finish_hook_ranks), {0, 1, 2})
+
+        intersect = a.intersect(b)
+        self.assertFalse(intersect.relocate_results)
+        self.assertEqual(intersect.finish_hook_cmd, "cmd_a")
+        self.assertFalse(intersect.finish_hook_all_ranks)
+        self.assertEqual(set(intersect.finish_hook_ranks), {1})
 
     def test_frozen_config(self):
         """Test that modifying frozen keys in ProfilerConfig raises exceptions."""
@@ -183,6 +228,153 @@ class TestNsightSystemsProfiler(unittest.TestCase):
     #         mock_end_range.assert_called_once()
     #         mock_start.assert_called_once()  # Should start in discrete mode
     #         mock_stop.assert_called_once()  # Should stop in discrete mode
+
+
+class TestProfilerFinishHook(unittest.TestCase):
+    """Tests for the finish-hook command dispatched from DistProfiler.stop()."""
+
+    def test_finish_hook_cmd_runs_on_default_ranks(self):
+        config = ProfilerConfig(
+            tool="nsys", enable=True, all_ranks=True, finish_hook_cmd="echo hi", save_path="/tmp/prof"
+        )
+        profiler = DistProfiler(rank=0, config=config, tool_config=NsightToolConfig(discrete=False))
+        with (
+            patch("verl.utils.profiler.nvtx_profile.get_platform"),
+            patch("verl.utils.profiler.profile.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            profiler.stop()
+
+            from verl.utils.profiler.nvtx_profile import RAY_NSIGHT_LOG_DIR
+
+            mock_run.assert_called_once()
+            args, kwargs = mock_run.call_args
+            self.assertEqual(args[0], "echo hi")
+            self.assertTrue(kwargs["shell"])
+            env = kwargs["env"]
+            self.assertEqual(env["VERL_PROFILE_RANK"], "0")
+            self.assertEqual(env["VERL_PROFILE_TOOL"], "nsys")
+            self.assertEqual(env["VERL_PROFILE_SAVE_PATH"], "/tmp/prof")
+            self.assertEqual(env["VERL_PROFILE_RAY_NSIGHT_DIR"], RAY_NSIGHT_LOG_DIR)
+
+    def test_finish_hook_cmd_respects_finish_hook_ranks(self):
+        # Selected finish-hook rank is 1, so rank 0 must not run the command.
+        config = ProfilerConfig(
+            tool="nsys", enable=True, all_ranks=True, finish_hook_cmd="echo hi", finish_hook_ranks=[1]
+        )
+        profiler = DistProfiler(rank=0, config=config, tool_config=NsightToolConfig(discrete=False))
+        with (
+            patch("verl.utils.profiler.nvtx_profile.get_platform"),
+            patch("verl.utils.profiler.profile.subprocess.run") as mock_run,
+        ):
+            profiler.stop()
+            mock_run.assert_not_called()
+
+    def test_finish_hook_cmd_runs_on_non_profiled_rank(self):
+        # Profile only rank 0, but the finish hook targets rank 1: the command runs on rank 1
+        # even though its backend profiler never started/stopped.
+        config = ProfilerConfig(tool="nsys", enable=True, ranks=[0], finish_hook_cmd="echo hi", finish_hook_ranks=[1])
+        profiler = DistProfiler(rank=1, config=config, tool_config=NsightToolConfig(discrete=False))
+        with (
+            patch("verl.utils.profiler.nvtx_profile.get_platform") as mock_get_platform,
+            patch("verl.utils.profiler.profile.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            profiler.stop()
+            mock_get_platform.return_value.profiler_stop.assert_not_called()
+            mock_run.assert_called_once()
+
+    def test_finish_hook_noop_when_unconfigured(self):
+        config = ProfilerConfig(tool="nsys", enable=True, all_ranks=True)
+        profiler = DistProfiler(rank=0, config=config, tool_config=NsightToolConfig(discrete=False))
+        with (
+            patch("verl.utils.profiler.nvtx_profile.get_platform"),
+            patch("verl.utils.profiler.profile.subprocess.run") as mock_run,
+        ):
+            profiler.stop()
+            mock_run.assert_not_called()
+
+    def test_finish_hook_cmd_failure_is_swallowed(self):
+        config = ProfilerConfig(tool="nsys", enable=True, all_ranks=True, finish_hook_cmd="false")
+        # Non-zero return code must not raise.
+        profiler = DistProfiler(rank=0, config=config, tool_config=NsightToolConfig(discrete=False))
+        with (
+            patch("verl.utils.profiler.nvtx_profile.get_platform"),
+            patch("verl.utils.profiler.profile.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+            profiler.stop()
+            mock_run.assert_called_once()
+        # A launch failure must not raise either.
+        profiler2 = DistProfiler(rank=0, config=config, tool_config=NsightToolConfig(discrete=False))
+        with (
+            patch("verl.utils.profiler.nvtx_profile.get_platform"),
+            patch("verl.utils.profiler.profile.subprocess.run", side_effect=OSError("nope")),
+        ):
+            profiler2.stop()
+
+
+class TestNsightRelocateResults(unittest.TestCase):
+    """Tests for moving Ray's fixed-location Nsight reports into save_path."""
+
+    def _make_profiler(self):
+        from verl.utils.profiler.nvtx_profile import NsightSystemsProfiler
+
+        return NsightSystemsProfiler(
+            rank=0,
+            config=ProfilerConfig(tool="nsys", enable=True, all_ranks=True),
+            tool_config=NsightToolConfig(discrete=False),
+        )
+
+    def test_relocate_moves_only_current_pid_files(self):
+        prof = self._make_profiler()
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst:
+            pid = os.getpid()
+            mine = os.path.join(src, f"worker_process_{pid}.nsys-rep")
+            mine_ranged = os.path.join(src, f"worker_process_{pid}.1.nsys-rep")
+            other = os.path.join(src, f"worker_process_{pid + 1}.nsys-rep")
+            for path in (mine, mine_ranged, other):
+                with open(path, "w") as fh:
+                    fh.write("x")
+
+            moved = prof.relocate_results(dst, rank=0, save_file_prefix="actor", source_dir=src)
+
+            self.assertEqual(len(moved), 2)
+            host = socket.gethostname()
+            self.assertTrue(os.path.exists(os.path.join(dst, f"actor_{host}_worker_process_{pid}.nsys-rep")))
+            self.assertTrue(os.path.exists(os.path.join(dst, f"actor_{host}_worker_process_{pid}.1.nsys-rep")))
+            # Files owned by another PID stay put; ours are moved (not copied).
+            self.assertTrue(os.path.exists(other))
+            self.assertFalse(os.path.exists(mine))
+
+    def test_relocate_no_matching_files_returns_empty(self):
+        prof = self._make_profiler()
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst:
+            self.assertEqual(prof.relocate_results(dst, source_dir=src), [])
+
+    def test_relocate_without_save_path_is_noop(self):
+        prof = self._make_profiler()
+        with tempfile.TemporaryDirectory() as src:
+            self.assertEqual(prof.relocate_results(None, source_dir=src), [])
+
+    def test_relocate_via_stop_when_enabled(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst:
+            pid = os.getpid()
+            report = os.path.join(src, f"worker_process_{pid}.nsys-rep")
+            with open(report, "w") as fh:
+                fh.write("x")
+
+            config = ProfilerConfig(tool="nsys", enable=True, all_ranks=True, relocate_results=True, save_path=dst)
+            profiler = DistProfiler(rank=0, config=config, tool_config=NsightToolConfig(discrete=False))
+            with (
+                patch("verl.utils.profiler.nvtx_profile.get_platform"),
+                patch("verl.utils.profiler.nvtx_profile.RAY_NSIGHT_LOG_DIR", src),
+            ):
+                profiler.stop()
+
+            host = socket.gethostname()
+            self.assertTrue(os.path.exists(os.path.join(dst, f"{host}_worker_process_{pid}.nsys-rep")))
+            self.assertFalse(os.path.exists(report))
 
 
 if __name__ == "__main__":

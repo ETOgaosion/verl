@@ -17,6 +17,25 @@ ranks: []
 # profile results saving path
 save_path: "outputs/profile"
 
+# When profiling finishes, move backend artifacts written to a framework-fixed location into
+# save_path. Currently only affects the nsys tool: Ray hardcodes the Nsight output directory
+# (/tmp/ray/session_latest/logs/nsight) and it cannot be changed, so enabling this relocates the
+# per-process *.nsys-rep files into save_path. Runs on the profiled ranks.
+relocate_results: False
+
+# Shell command executed on the selected ranks when profiling finishes (after relocate_results).
+# Runs once per profiled step's stop(). The following environment variables are exported:
+# VERL_PROFILE_SAVE_PATH, VERL_PROFILE_TOOL, VERL_PROFILE_RANK, VERL_PROFILE_PID,
+# VERL_PROFILE_ROLE (if known) and VERL_PROFILE_RAY_NSIGHT_DIR (nsys only). null disables it.
+finish_hook_cmd: null
+
+# Run finish_hook_cmd on all ranks.
+finish_hook_all_ranks: False
+
+# Ranks that run finish_hook_cmd. [] or [0,1,...]. When both this and finish_hook_all_ranks are
+# unset, the hook falls back to the profiled ranks (all_ranks / ranks).
+finish_hook_ranks: []
+
 tool_config:
   npu:
     # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs

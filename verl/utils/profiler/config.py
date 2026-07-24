@@ -221,6 +221,18 @@ class ProfilerConfig(BaseConfig):
         all_ranks (bool): Whether to profile all ranks.
         ranks (list[int]): The ranks that will be profiled. Defaults to [].
         global_tool_config (Any): Global tool configuration for all profiling tools.
+        relocate_results (bool): When profiling finishes, move backend artifacts that the framework writes
+          to a fixed location into ``save_path``. Currently only affects the ``nsys`` tool, whose reports Ray
+          hardcodes under ``/tmp/ray/session_latest/logs/nsight`` (the directory is not configurable, see
+          https://docs.ray.io/en/latest/ray-observability/user-guides/profiling.html). Runs on the profiled ranks.
+        finish_hook_cmd (Optional[str]): Shell command executed on the selected ranks when profiling finishes
+          (after the backend profiler's ``stop()`` and after ``relocate_results``). Useful for post-processing
+          or uploading traces. The command runs with these extra environment variables: ``VERL_PROFILE_SAVE_PATH``,
+          ``VERL_PROFILE_TOOL``, ``VERL_PROFILE_RANK``, ``VERL_PROFILE_PID``, ``VERL_PROFILE_ROLE`` (if known) and
+          ``VERL_PROFILE_RAY_NSIGHT_DIR`` (nsys only).
+        finish_hook_all_ranks (bool): Run ``finish_hook_cmd`` on every rank.
+        finish_hook_ranks (list[int]): Ranks that run ``finish_hook_cmd``. Ignored when ``finish_hook_all_ranks``
+          is True. When both are unset the hook falls back to the profiled ranks (``all_ranks``/``ranks``).
     """
 
     tool: Optional[str] = MISSING
@@ -230,6 +242,11 @@ class ProfilerConfig(BaseConfig):
     save_path: Optional[str] = MISSING
     tool_config: Any = MISSING  # Just a placeholder, will use configs above directly
     global_tool_config: Optional[Any] = None  # Global tool configuration for all profiling tools
+    # --- Finish hook (runs when profiling stops) ---
+    relocate_results: bool = False
+    finish_hook_cmd: Optional[str] = None
+    finish_hook_all_ranks: bool = False
+    finish_hook_ranks: list[int] = field(default_factory=list)
 
     def union(self, other: "ProfilerConfig") -> "ProfilerConfig":
         assert self.tool == other.tool, f"Cannot union ProfilerConfig with different tools: {self.tool} vs {other.tool}"
@@ -241,6 +258,10 @@ class ProfilerConfig(BaseConfig):
             save_path=self.save_path,
             tool_config=self.tool_config,
             global_tool_config=self.global_tool_config or other.global_tool_config,
+            relocate_results=self.relocate_results or other.relocate_results,
+            finish_hook_cmd=self.finish_hook_cmd or other.finish_hook_cmd,
+            finish_hook_all_ranks=self.finish_hook_all_ranks or other.finish_hook_all_ranks,
+            finish_hook_ranks=list(set(self.finish_hook_ranks or []) | set(other.finish_hook_ranks or [])),
         )
 
     def intersect(self, other: "ProfilerConfig") -> "ProfilerConfig":
@@ -255,12 +276,22 @@ class ProfilerConfig(BaseConfig):
             save_path=self.save_path,
             tool_config=self.tool_config,
             global_tool_config=self.global_tool_config if self.global_tool_config else other.global_tool_config,
+            relocate_results=self.relocate_results and other.relocate_results,
+            finish_hook_cmd=self.finish_hook_cmd if self.finish_hook_cmd else other.finish_hook_cmd,
+            finish_hook_all_ranks=self.finish_hook_all_ranks and other.finish_hook_all_ranks,
+            finish_hook_ranks=list(set(self.finish_hook_ranks or []) & set(other.finish_hook_ranks or [])),
         )
 
     def __post_init__(self) -> None:
         """config validation logics go here"""
         assert isinstance(self.ranks, set | list | tuple), (
             f"Profiler ranks must be of type list, got {type(self.ranks)}"
+        )
+        assert isinstance(self.finish_hook_ranks, set | list | tuple), (
+            f"Profiler finish_hook_ranks must be of type list, got {type(self.finish_hook_ranks)}"
+        )
+        assert self.finish_hook_cmd is None or isinstance(self.finish_hook_cmd, str), (
+            f"finish_hook_cmd must be str or None, got {type(self.finish_hook_cmd)}"
         )
 
 

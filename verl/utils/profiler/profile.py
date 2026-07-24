@@ -13,10 +13,15 @@
 # limitations under the License.
 
 import functools
+import logging
+import os
+import subprocess
 from typing import Callable, Optional
 
 from ..tracking import RLInsightLogger
 from .config import ProfilerConfig
+
+logger = logging.getLogger(__name__)
 
 
 def mark_start_range(
@@ -122,6 +127,17 @@ class DistProfiler:
         if self._tool == "precision_debugger" and self._enable:
             self._this_rank = True
 
+        # Finish-hook rank selection (independent of the profiled ranks). The command runs on
+        # `finish_hook_all_ranks`/`finish_hook_ranks`, defaulting to the profiled ranks when unset.
+        self._finish_hook_cmd = getattr(config, "finish_hook_cmd", None)
+        self._relocate_results = getattr(config, "relocate_results", False)
+        if getattr(config, "finish_hook_all_ranks", False):
+            self._finish_hook_this_rank = True
+        elif getattr(config, "finish_hook_ranks", None):
+            self._finish_hook_this_rank = rank in config.finish_hook_ranks
+        else:
+            self._finish_hook_this_rank = self._this_rank
+
         # TorchMemoryProfiler currently do not support discrete mode.
         self._discrete = getattr(tool_config, "discrete", False) if tool_config else False
 
@@ -177,10 +193,73 @@ class DistProfiler:
             return getattr(self._impl, "start", lambda **_: None)(**kwargs)
 
     def stop(self):
-        """Profiler switch for the Ray main flow; sets `this_step=False`."""
+        """Profiler switch for the Ray main flow; sets `this_step=False`.
+
+        After the backend profiler stops, run the finish hook (see ``_run_finish_hook``): relocate
+        backend artifacts on the profiled ranks and/or run the user command on the selected ranks.
+        The hook is invoked outside the `check_this_rank` gate so the command may target ranks that
+        were not themselves profiled.
+        """
+        result = None
         if self.check_enable() and self.check_this_rank():
             self._this_step = False
-            return getattr(self._impl, "stop", lambda: None)()
+            result = getattr(self._impl, "stop", lambda: None)()
+        if self.check_enable():
+            self._run_finish_hook()
+        return result
+
+    def _run_finish_hook(self) -> None:
+        """Relocate backend artifacts and run the user's finish command when profiling stops.
+
+        Fires on every ``stop()`` (i.e. once per profiled step). Relocation happens on the ranks that
+        actually profiled (that is where artifacts live); the user command runs on the finish-hook ranks.
+        Both steps are best-effort: failures are logged and never interrupt training.
+        """
+        save_path = getattr(self.config, "save_path", None)
+
+        # (1) Relocate backend artifacts (currently nsys) out of framework-fixed dirs into save_path.
+        if self._relocate_results and self.check_this_rank():
+            relocate = getattr(self._impl, "relocate_results", None)
+            if callable(relocate):
+                try:
+                    relocate(save_path, rank=self.rank, save_file_prefix=self.save_file_prefix)
+                except Exception as e:  # never let post-processing crash the training loop
+                    logger.warning("profiler finish hook: relocating results failed on rank %s: %s", self.rank, e)
+
+        # (2) Run the user's custom command on the selected ranks.
+        if self._finish_hook_cmd and self._finish_hook_this_rank:
+            self._run_finish_command(self._finish_hook_cmd, save_path)
+
+    def _run_finish_command(self, cmd: str, save_path: Optional[str]) -> None:
+        """Execute the user finish command in a shell, exposing the profiler context via env vars."""
+        env = os.environ.copy()
+        env["VERL_PROFILE_SAVE_PATH"] = str(save_path) if save_path else ""
+        env["VERL_PROFILE_TOOL"] = str(self._tool) if self._tool else ""
+        env["VERL_PROFILE_RANK"] = str(self.rank)
+        env["VERL_PROFILE_PID"] = str(os.getpid())
+        if self.save_file_prefix:
+            env["VERL_PROFILE_ROLE"] = str(self.save_file_prefix)
+        if self._tool == "nsys":
+            from .nvtx_profile import RAY_NSIGHT_LOG_DIR
+
+            env["VERL_PROFILE_RAY_NSIGHT_DIR"] = RAY_NSIGHT_LOG_DIR
+
+        logger.info("profiler finish hook: running command on rank %s: %s", self.rank, cmd)
+        try:
+            completed = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True)
+        except Exception as e:  # command failed to launch; do not crash training
+            logger.warning("profiler finish hook: command failed to launch on rank %s: %s", self.rank, e)
+            return
+        if completed.returncode != 0:
+            logger.warning(
+                "profiler finish hook: command exited with %s on rank %s.\nstdout:\n%s\nstderr:\n%s",
+                completed.returncode,
+                self.rank,
+                completed.stdout,
+                completed.stderr,
+            )
+        elif completed.stdout:
+            logger.info("profiler finish hook: command stdout (rank %s):\n%s", self.rank, completed.stdout)
 
     def step(self):
         """Advance the profiler schedule by one step, intended to be called per mini-batch.

@@ -41,6 +41,39 @@ By default the `*.nsys-rep` files are saved in the directory `/tmp/ray/session_l
 
 Some users may think it is not convenient, but it is understandable that Ray may start hundreds of processes and it would be a big network file system pressure if we save the files in one central place.
 
+### Finish hook: relocate results and run a custom command
+
+Because Ray hardcodes the Nsight output directory, verl provides a *finish hook* that runs when profiling stops (i.e. on every profiled step's `stop_profile`). It has two independent parts, both configured per role under `profiler`:
+
+* **`relocate_results`** (bool, default `False`). When `True`, each profiled worker moves *its own* `worker_process_<pid>.*` reports out of `/tmp/ray/session_latest/logs/nsight/` into `save_path`. Matching is by PID (nsys's `%p` token equals the worker process PID), so co-located ranks never touch each other's files and there is no race. Destination filenames are prefixed with the role and hostname (e.g. `actor_<host>_worker_process_<pid>.nsys-rep`) to stay unique across nodes. The move is best-effort: nsys only finalizes a report after the capture session shuts down, so files that are not present yet are simply skipped and nothing is ever deleted.
+* **`finish_hook_cmd`** (str, default `null`). A shell command executed on the selected ranks after `relocate_results`. Use it for post-processing, compression, or uploading traces to remote storage. It runs with these extra environment variables:
+  * `VERL_PROFILE_SAVE_PATH` — the configured `save_path`.
+  * `VERL_PROFILE_TOOL` — the profiler tool (e.g. `nsys`).
+  * `VERL_PROFILE_RANK` — the global rank.
+  * `VERL_PROFILE_PID` — the worker process PID (matches the `%p` in the report filename).
+  * `VERL_PROFILE_ROLE` — the worker role, when known.
+  * `VERL_PROFILE_RAY_NSIGHT_DIR` — Ray's fixed Nsight log dir (nsys only), handy for grabbing stragglers.
+
+**Choosing which ranks run the command.** `finish_hook_cmd` runs on `finish_hook_all_ranks`/`finish_hook_ranks`. When both are unset it falls back to the profiled ranks (`all_ranks`/`ranks`), so by default the command runs wherever profiling happened. `finish_hook_ranks` may also select ranks that were *not* profiled (for example to run a single aggregation step on rank 0). `relocate_results` always runs on the profiled ranks, since that is where the artifacts live.
+
+Example: move every rank's reports into `save_path` and then upload them to HDFS from that node:
+
+```yaml
+    global_profiler:
+        tool: nsys
+        steps: [1, 2, 5]
+        save_path: "outputs/profile"
+    actor_rollout_ref:
+        actor:
+            profiler:
+                enable: True
+                all_ranks: True
+                relocate_results: True
+                finish_hook_cmd: 'hdfs dfs -put -f "$VERL_PROFILE_SAVE_PATH"/*.nsys-rep hdfs:///my/profiles/'
+```
+
+The command failing (non-zero exit or launch error) is logged but never interrupts training.
+
 ## Usage Example
 
 To enable profiling for specific components and steps, modify your ppo_trainer.yaml like this:
