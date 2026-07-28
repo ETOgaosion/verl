@@ -1,6 +1,6 @@
 # PyTorch Profiling in verl
 
-Last updated: 01/13/2026.
+Last updated: 07/28/2026.
 
 This guide explains how to use the native [PyTorch Profiler](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) for profiling verl training runs.
 
@@ -151,8 +151,8 @@ attributed to a specific process without opening it. The stem is:
 
 * **`role`**: the worker role (e.g. `actor`, `ref`, `value-model` for the critic), so results
   from different roles at the same rank are distinguishable.
-* **`scope`**: the profiled region passed to `start_profile`/`annotate` (e.g. `e2e`); it is also
-  used as a sub-directory under `save_path`.
+* **`scope`**: the profiled region passed to `start_profile`/`annotate` (e.g. `e2e` for a whole
+  training step, or a stage name such as `actor_update` in discrete mode).
 * **`rank`/`world`**: the global `torch.distributed` rank and world size.
 * **`tp/pp/dp/cp`**: tensor/pipeline/data/context parallel ranks, included when Megatron's
   parallel state is initialized (plain FSDP data parallelism only reports `rank`).
@@ -160,7 +160,10 @@ attributed to a specific process without opening it. The stem is:
 
 ## Visualization
 
-Collected trace files (usually `.json` or `.json.gz`) are stored in the configured `save_path`.
+Collected trace files (usually `.json` or `.json.gz`) are stored flat in the configured
+`save_path`: every role, rank and scope writes there directly, since the naming scheme above
+already keeps the files unique and self-describing. This also means `finish_hook_cmd`, which
+receives `save_path` via `VERL_PROFILE_SAVE_PATH`, sees all of them without recursing.
 
 You can visualize them using:
 

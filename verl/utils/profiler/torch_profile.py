@@ -119,8 +119,9 @@ def get_torch_profiler(
         contents: Selects the other ``torch.profiler.profile`` arguments -- ``cpu``/``cuda``
             map to ``activities``, ``shapes`` to ``record_shapes``, ``memory`` to
             ``profile_memory`` and ``stack`` to ``with_stack``.
-        save_path: Directory (optionally suffixed by ``role``) to write chrome traces to.
-        role: Optional sub-directory / logical scope name, also embedded in the filename.
+        save_path: Directory to write chrome traces to.
+        role: Optional logical scope name (e.g. ``e2e``, or a stage name in discrete mode),
+            embedded in the filename.
         save_file_prefix: Optional filename prefix, typically the worker role (``actor``/
             ``critic``/``ref``) so per-process traces are distinguishable.
         rank: Global rank, embedded in the trace filename (a fallback when
@@ -129,9 +130,10 @@ def get_torch_profiler(
             (``wait``/``warmup``/``active``/``repeat``/``skip_first``). When provided, the
             caller must drive ``prof.step()`` once per step to advance the schedule.
     """
-    save_dir = os.path.join(save_path, role) if role else save_path
-
-    os.makedirs(save_dir, exist_ok=True)
+    # All traces land directly in save_path: the role is already part of the filename, so an
+    # extra directory level would only scatter one step's traces across sibling dirs and hide
+    # them from finish_hook_cmd, which is handed save_path.
+    os.makedirs(save_path, exist_ok=True)
 
     base_file_name = build_trace_basename(rank=rank, role=role, save_file_prefix=save_file_prefix)
 
@@ -143,7 +145,7 @@ def get_torch_profiler(
         idx = handler_state["count"]
         handler_state["count"] += 1
         suffix = "" if idx == 0 else f"_cycle{idx}"
-        out_path = os.path.join(save_dir, f"{base_file_name}{suffix}.json.gz")
+        out_path = os.path.join(save_path, f"{base_file_name}{suffix}.json.gz")
         print(f"[Profiler] Saving trace to {out_path}")
         prof.export_chrome_trace(out_path)
 

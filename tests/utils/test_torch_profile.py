@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -55,6 +56,24 @@ class TestTorchProfile(unittest.TestCase):
         self.assertTrue(kwargs["with_stack"])
         self.assertFalse(kwargs["record_shapes"])
         self.assertFalse(kwargs["profile_memory"])
+
+    @patch("torch.profiler.profile")
+    def test_role_goes_in_filename_not_a_directory(self, mock_profile):
+        # The role must not create a directory level: one step's traces would be scattered
+        # across sibling dirs and hidden from finish_hook_cmd, which only sees save_path.
+        with tempfile.TemporaryDirectory() as save_path:
+            get_torch_profiler(contents=["cpu"], save_path=save_path, role="e2e", save_file_prefix="actor", rank=0)
+            # No "e2e" sub-directory is created next to the traces.
+            self.assertEqual(os.listdir(save_path), [])
+
+            _, kwargs = mock_profile.call_args
+            mock_prof = MagicMock()
+            kwargs["on_trace_ready"](mock_prof)
+
+            (out_path,), _ = mock_prof.export_chrome_trace.call_args
+            self.assertEqual(os.path.dirname(out_path), save_path)
+            self.assertTrue(os.path.basename(out_path).startswith("actor_e2e_"))
+            self.assertTrue(out_path.endswith(".json.gz"))
 
     @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
     def test_profiler_lifecycle(self, mock_get_profiler):
