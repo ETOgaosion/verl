@@ -43,7 +43,7 @@ Some users may think it is not convenient, but it is understandable that Ray may
 
 ### Finish hook: relocate results and run a custom command
 
-Because Ray hardcodes the Nsight output directory, verl provides a *finish hook* that runs when profiling stops (i.e. on every profiled step's `stop_profile`). It has two independent parts, both configured per role under `profiler`:
+Because Ray hardcodes the Nsight output directory, verl provides a *finish hook* that runs when profiling stops (i.e. on every profiled step's `stop_profile`). It has two independent parts, configurable either once under `global_profiler` (every role inherits it) or per role under `profiler` (which overrides the global value):
 
 * **`relocate_results`** (bool, default `False`). When `True`, each profiled worker moves *its own* `worker_process_<pid>.*` reports out of `/tmp/ray/session_latest/logs/nsight/` into `save_path`. Matching is by PID (nsys's `%p` token equals the worker process PID), so co-located ranks never touch each other's files and there is no race. Destination filenames are prefixed with the role and hostname (e.g. `actor_<host>_worker_process_<pid>.nsys-rep`) to stay unique across nodes. The move is best-effort: nsys only finalizes a report after the capture session shuts down, so files that are not present yet are simply skipped and nothing is ever deleted.
 * **`finish_hook_cmd`** (str, default `null`). A shell command executed on the selected ranks after `relocate_results`. Use it for post-processing, compression, or uploading traces to remote storage. It runs with these extra environment variables:
@@ -54,7 +54,9 @@ Because Ray hardcodes the Nsight output directory, verl provides a *finish hook*
   * `VERL_PROFILE_ROLE` — the worker role, when known.
   * `VERL_PROFILE_RAY_NSIGHT_DIR` — Ray's fixed Nsight log dir (nsys only), handy for grabbing stragglers.
 
-**Choosing which ranks run the command.** `finish_hook_cmd` runs on `finish_hook_all_ranks`/`finish_hook_ranks`. When both are unset it falls back to the profiled ranks (`all_ranks`/`ranks`), so by default the command runs wherever profiling happened. `finish_hook_ranks` may also select ranks that were *not* profiled (for example to run a single aggregation step on rank 0). `relocate_results` always runs on the profiled ranks, since that is where the artifacts live.
+**Choosing which ranks run the command.** `finish_hook_cmd` runs on `finish_hook_all_ranks`/`finish_hook_ranks`. When both are unset it falls back to the profiled ranks (`all_ranks`/`ranks`), so by default the command runs wherever profiling happened. `finish_hook_ranks` may also select ranks that were *not* profiled (for example to run a single aggregation step on rank 0). `relocate_results` always runs on the profiled ranks, since that is where the artifacts live. Note that `save_path` is usually node-local, so with multi-node profiling keep the hook on every profiled rank rather than narrowing it to rank 0, otherwise the other nodes' artifacts are never picked up.
+
+**Which role's config applies.** A worker reads exactly one role block, chosen by its own role: a collocated `actor_rollout_ref` worker reads `actor_rollout_ref.actor.profiler`, and `rollout.profiler` only applies to a standalone rollout worker. Setting the hook on `global_profiler` avoids having to guess.
 
 Example: move every rank's reports into `save_path` and then upload them to HDFS from that node:
 
@@ -63,16 +65,22 @@ Example: move every rank's reports into `save_path` and then upload them to HDFS
         tool: nsys
         steps: [1, 2, 5]
         save_path: "outputs/profile"
+        relocate_results: True
+        finish_hook_cmd: 'hdfs dfs -put -f "$VERL_PROFILE_SAVE_PATH"/*.nsys-rep hdfs:///my/profiles/'
     actor_rollout_ref:
         actor:
             profiler:
                 enable: True
                 all_ranks: True
-                relocate_results: True
-                finish_hook_cmd: 'hdfs dfs -put -f "$VERL_PROFILE_SAVE_PATH"/*.nsys-rep hdfs:///my/profiles/'
 ```
 
-The command failing (non-zero exit or launch error) is logged but never interrupts training.
+On the command line, single-quote the command so your shell does not expand `$VERL_PROFILE_SAVE_PATH` before the worker sees it:
+
+```bash
+    global_profiler.finish_hook_cmd='hdfs dfs -put -f "$VERL_PROFILE_SAVE_PATH"/*.nsys-rep hdfs:///my/profiles/'
+```
+
+**Observing the hook.** Every `stop_profile` prints a `[Profiler][finish_hook]` line to the worker's stdout stating whether a command is configured and whether the current rank was selected, followed by the command line itself, its merged stdout/stderr streamed live, and its exit code. These are plain prints rather than logger calls so they show up in the Ray worker logs regardless of the logging level. The command failing (non-zero exit or launch error) never interrupts training.
 
 ## Usage Example
 

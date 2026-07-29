@@ -24,6 +24,15 @@ from .config import ProfilerConfig
 logger = logging.getLogger(__name__)
 
 
+def _hook_print(msg: str) -> None:
+    """Report finish-hook activity on stdout.
+
+    Worker processes do not necessarily inherit the ``verl`` logger configuration, so hook
+    progress is printed rather than logged to guarantee it reaches the Ray worker logs.
+    """
+    print(f"[Profiler][finish_hook] {msg}", flush=True)
+
+
 def mark_start_range(
     message: Optional[str] = None,
     color: Optional[str] = None,
@@ -213,9 +222,14 @@ class DistProfiler:
 
         Fires on every ``stop()`` (i.e. once per profiled step). Relocation happens on the ranks that
         actually profiled (that is where artifacts live); the user command runs on the finish-hook ranks.
-        Both steps are best-effort: failures are logged and never interrupt training.
+        Both steps are best-effort: failures are reported and never interrupt training.
         """
         save_path = getattr(self.config, "save_path", None)
+
+        _hook_print(
+            f"rank {self.rank}: profiler stopped; cmd={self._finish_hook_cmd!r}, "
+            f"run_on_this_rank={self._finish_hook_this_rank}, save_path={save_path!r}"
+        )
 
         # (1) Relocate backend artifacts (currently nsys) out of framework-fixed dirs into save_path.
         if self._relocate_results and self.check_this_rank():
@@ -224,14 +238,22 @@ class DistProfiler:
                 try:
                     relocate(save_path, rank=self.rank, save_file_prefix=self.save_file_prefix)
                 except Exception as e:  # never let post-processing crash the training loop
-                    logger.warning("profiler finish hook: relocating results failed on rank %s: %s", self.rank, e)
+                    _hook_print(f"rank {self.rank}: relocating results failed: {e}")
 
         # (2) Run the user's custom command on the selected ranks.
-        if self._finish_hook_cmd and self._finish_hook_this_rank:
-            self._run_finish_command(self._finish_hook_cmd, save_path)
+        if not self._finish_hook_cmd:
+            return
+        if not self._finish_hook_this_rank:
+            _hook_print(f"rank {self.rank}: command skipped, rank not selected by finish_hook_ranks/all_ranks")
+            return
+        self._run_finish_command(self._finish_hook_cmd, save_path)
 
     def _run_finish_command(self, cmd: str, save_path: Optional[str]) -> None:
-        """Execute the user finish command in a shell, exposing the profiler context via env vars."""
+        """Execute the user finish command in a shell, exposing the profiler context via env vars.
+
+        The command's merged stdout/stderr is streamed line by line so long-running hooks
+        (uploads, archiving) are observable while they run.
+        """
         env = os.environ.copy()
         env["VERL_PROFILE_SAVE_PATH"] = str(save_path) if save_path else ""
         env["VERL_PROFILE_TOOL"] = str(self._tool) if self._tool else ""
@@ -244,22 +266,30 @@ class DistProfiler:
 
             env["VERL_PROFILE_RAY_NSIGHT_DIR"] = RAY_NSIGHT_LOG_DIR
 
-        logger.info("profiler finish hook: running command on rank %s: %s", self.rank, cmd)
+        _hook_print(f"rank {self.rank}: running command: {cmd}")
+        _hook_print(f"rank {self.rank}: VERL_PROFILE_SAVE_PATH={env['VERL_PROFILE_SAVE_PATH']}")
         try:
-            completed = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True)
+            proc = subprocess.Popen(
+                cmd,
+                shell=True,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
         except Exception as e:  # command failed to launch; do not crash training
+            _hook_print(f"rank {self.rank}: command failed to launch: {e}")
             logger.warning("profiler finish hook: command failed to launch on rank %s: %s", self.rank, e)
             return
-        if completed.returncode != 0:
-            logger.warning(
-                "profiler finish hook: command exited with %s on rank %s.\nstdout:\n%s\nstderr:\n%s",
-                completed.returncode,
-                self.rank,
-                completed.stdout,
-                completed.stderr,
-            )
-        elif completed.stdout:
-            logger.info("profiler finish hook: command stdout (rank %s):\n%s", self.rank, completed.stdout)
+
+        with proc:
+            for line in proc.stdout:
+                _hook_print(f"rank {self.rank}: {line.rstrip()}")
+        returncode = proc.returncode
+        _hook_print(f"rank {self.rank}: command exited with {returncode}")
+        if returncode != 0:
+            logger.warning("profiler finish hook: command exited with %s on rank %s: %s", returncode, self.rank, cmd)
 
     def step(self):
         """Advance the profiler schedule by one step, intended to be called per mini-batch.

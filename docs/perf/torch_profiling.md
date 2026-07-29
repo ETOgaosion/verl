@@ -165,6 +165,17 @@ Collected trace files (usually `.json` or `.json.gz`) are stored flat in the con
 already keeps the files unique and self-describing. This also means `finish_hook_cmd`, which
 receives `save_path` via `VERL_PROFILE_SAVE_PATH`, sees all of them without recursing.
 
+To ship the traces somewhere after each profiled step, set the hook once on `global_profiler`
+(every role inherits it) and single-quote it so your shell does not expand the variable early:
+
+```bash
+    global_profiler.finish_hook_cmd='my-upload-tool "$VERL_PROFILE_SAVE_PATH"'
+```
+
+The hook prints the command, its output and its exit code to the worker's log on every
+`stop_profile`. See [Nsight Systems profiling](nsight_profiling.md) for the full description of
+the hook, including how to choose which ranks run it.
+
 You can visualize them using:
 
 1.  **Chrome Tracing**: Open `chrome://tracing` in a Chrome browser and load the JSON file.

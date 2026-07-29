@@ -291,6 +291,25 @@ global_profiler:
   # Path to save profiling contents
   save_path: "outputs/profile"
 
+  # When profiling finishes, move backend artifacts written to a framework-fixed location into
+  # save_path. Currently only affects nsys: Ray hardcodes its Nsight output dir
+  # (/tmp/ray/session_latest/logs/nsight). Inherited by every role's profiler.
+  relocate_results: False
+
+  # Shell command executed on the selected ranks when profiling finishes (after relocate_results),
+  # once per profiled step. Inherited by every role's profiler, so setting it here covers
+  # actor/rollout/ref/critic at once. Env vars available: VERL_PROFILE_SAVE_PATH,
+  # VERL_PROFILE_TOOL, VERL_PROFILE_RANK, VERL_PROFILE_PID, VERL_PROFILE_ROLE,
+  # VERL_PROFILE_RAY_NSIGHT_DIR (nsys only). null disables it.
+  finish_hook_cmd: null
+
+  # Run finish_hook_cmd on all ranks. Inherited by every role's profiler.
+  finish_hook_all_ranks: False
+
+  # Ranks that run finish_hook_cmd. [] or [0,1,...]. Falls back to the profiled ranks when unset.
+  # Inherited by every role's profiler.
+  finish_hook_ranks: []
+
   # Specific tool configs, can use +profiler.tool_config.[tool].xxx to config
   global_tool_config:
 
