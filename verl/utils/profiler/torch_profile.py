@@ -70,13 +70,15 @@ def build_trace_basename(
     role: Optional[str] = None,
     save_file_prefix: Optional[str] = None,
     topology: Optional[dict] = None,
+    profile_step: Optional[int] = None,
 ) -> str:
     """Build a descriptive, per-process trace filename stem.
 
     Encodes -- when available -- the worker role (``save_file_prefix``, e.g. ``actor``),
-    the profiling scope role (``role``, e.g. ``e2e``), the global rank and world size,
-    and the tensor/pipeline/data/context parallel ranks, followed by pid and a
-    timestamp so that files written by different processes never collide.
+    the profiling scope role (``role``, e.g. ``e2e``), the training step
+    (``profile_step``), the global rank and world size, and the
+    tensor/pipeline/data/context parallel ranks, followed by pid and a timestamp so that
+    files written by different processes never collide.
     """
     topology = get_dist_topology() if topology is None else topology
     current_time = datetime.now(tz=timezone.utc).astimezone()
@@ -88,6 +90,8 @@ def build_trace_basename(
         parts.append(_sanitize_name_part(save_file_prefix))
     if role:
         parts.append(_sanitize_name_part(role))
+    if profile_step is not None:
+        parts.append(f"step{_sanitize_name_part(profile_step)}")
 
     global_rank = topology.get("rank", rank)
     world_size = topology.get("world_size")
@@ -112,6 +116,7 @@ def get_torch_profiler(
     save_file_prefix: Optional[str] = None,
     rank: int = 0,
     schedule: Optional[dict] = None,
+    profile_step: Optional[int] = None,
 ):
     """Build a ``torch.profiler.profile`` instance.
 
@@ -129,13 +134,16 @@ def get_torch_profiler(
         schedule: Optional kwargs for ``torch.profiler.schedule``
             (``wait``/``warmup``/``active``/``repeat``/``skip_first``). When provided, the
             caller must drive ``prof.step()`` once per step to advance the schedule.
+        profile_step: Optional training step being profiled, embedded in the filename.
     """
     # All traces land directly in save_path: the role is already part of the filename, so an
     # extra directory level would only scatter one step's traces across sibling dirs and hide
     # them from finish_hook_cmd, which is handed save_path.
     os.makedirs(save_path, exist_ok=True)
 
-    base_file_name = build_trace_basename(rank=rank, role=role, save_file_prefix=save_file_prefix)
+    base_file_name = build_trace_basename(
+        rank=rank, role=role, save_file_prefix=save_file_prefix, profile_step=profile_step
+    )
 
     # A scheduled profiler can fire on_trace_ready multiple times (one per active
     # cycle), so keep an invocation counter to avoid overwriting earlier cycles.
@@ -144,7 +152,15 @@ def get_torch_profiler(
     def _trace_handler(prof):
         idx = handler_state["count"]
         handler_state["count"] += 1
-        suffix = "" if idx == 0 else f"_cycle{idx}"
+        if schedule:
+            # Every scheduled file covers only part of the update loop, so tag it with its
+            # cycle index and with the mini-batch (profiler step) the cycle ended on.
+            suffix = f"_cycle{idx}"
+            mini_batch = getattr(prof, "step_num", None)
+            if isinstance(mini_batch, int):
+                suffix += f"_mb{mini_batch}"
+        else:
+            suffix = "" if idx == 0 else f"_cycle{idx}"
         out_path = os.path.join(save_path, f"{base_file_name}{suffix}.json.gz")
         print(f"[Profiler] Saving trace to {out_path}")
         prof.export_chrome_trace(out_path)
@@ -218,6 +234,8 @@ class Profiler(DistProfiler):
         self.discrete = getattr(self.tool_config, "discrete", False)
         # Resolved torch.profiler.schedule kwargs for the active run (None => continuous).
         self._schedule_kwargs = None
+        # Training step of the profiled window, reported by the trainer on start().
+        self._profile_step = None
 
     def check(self):
         return self.prof is not None
@@ -240,6 +258,9 @@ class Profiler(DistProfiler):
 
     def start(self, **kwargs):
         role = kwargs.get("role", None)
+        # Recorded outside the discrete gate: discrete mode opens its profilers later, from
+        # annotate(), and still needs to know which training step it is collecting.
+        self._profile_step = kwargs.get("profile_step", kwargs.get("global_step"))
         if not self.discrete and Profiler._define_count == 0:
             self._schedule_kwargs = self._resolve_schedule_kwargs()
             self.prof = get_torch_profiler(
@@ -249,6 +270,7 @@ class Profiler(DistProfiler):
                 save_file_prefix=self.save_file_prefix,
                 rank=self.rank,
                 schedule=self._schedule_kwargs,
+                profile_step=self._profile_step,
             )
             print(f"[Profiler] started for rank {self.rank}")
             self.prof.start()
@@ -306,9 +328,12 @@ class Profiler(DistProfiler):
                 prof = get_torch_profiler(
                     contents=self.contents,
                     save_path=self.save_path,
-                    role=role,
+                    # Without an explicit role the stage is still identified by the wrapped
+                    # function, which is what the reader needs to attribute the trace.
+                    role=role or profile_name,
                     save_file_prefix=self.save_file_prefix,
                     rank=self.rank,
+                    profile_step=self._profile_step,
                 )
                 prof.start()
                 try:

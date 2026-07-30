@@ -1,6 +1,6 @@
 # PyTorch Profiling in verl
 
-Last updated: 07/28/2026.
+Last updated: 07/30/2026.
 
 This guide explains how to use the native [PyTorch Profiler](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) for profiling verl training runs.
 
@@ -136,7 +136,7 @@ actor_rollout_ref:
   # rollout & ref follow actor settings
 ```
 
-With the configuration above, within each profiled training step verl skips the first mini-batch, then runs two cycles of `wait(1) -> warmup(1) -> active(3)`, producing two trace files (the second suffixed with `_cycle1`). If a training step has fewer mini-batches than the schedule needs, only the mini-batches that were reached are recorded.
+With the configuration above, within each profiled training step verl skips the first mini-batch, then runs two cycles of `wait(1) -> warmup(1) -> active(3)`, producing two trace files suffixed `_cycle0_mb<N>` and `_cycle1_mb<N>`, where `mb<N>` is the mini-batch the cycle ended on. If a training step has fewer mini-batches than the schedule needs, only the mini-batches that were reached are recorded.
 
 `schedule` only applies to the training update loop (Actor RL update and SFT). It is a no-op for the rollout engine side, which uses `profile_token_start`/`profile_token_end` instead.
 
@@ -146,17 +146,46 @@ Because profiling runs in every training process, each trace file is named so it
 attributed to a specific process without opening it. The stem is:
 
 ```
-[<role>_][<scope>_]rank<r>[-of-<world>][_tp<..>-pp<..>-dp<..>-cp<..>]_pid<pid>_<timestamp>[_cycle<N>].json.gz
+[<role>_][<scope>_][step<S>_]rank<r>[-of-<world>][_tp<..>-pp<..>-dp<..>-cp<..>]_pid<pid>_<timestamp>[_cycle<N>[_mb<M>]].json.gz
 ```
 
 * **`role`**: the worker role (e.g. `actor`, `ref`, `value-model` for the critic), so results
-  from different roles at the same rank are distinguishable.
+  from different roles at the same rank are distinguishable. A colocated hybrid worker reports
+  its combined role, `actor-rollout-ref` (underscores in labels become hyphens, since underscore
+  separates the fields).
 * **`scope`**: the profiled region passed to `start_profile`/`annotate` (e.g. `e2e` for a whole
-  training step, or a stage name such as `actor_update` in discrete mode).
+  training step, or a stage name such as `actor-update` in discrete mode).
+* **`step<S>`**: the training step (`global_steps`) being profiled, i.e. one of
+  `global_profiler.steps`.
 * **`rank`/`world`**: the global `torch.distributed` rank and world size.
 * **`tp/pp/dp/cp`**: tensor/pipeline/data/context parallel ranks, included when Megatron's
   parallel state is initialized (plain FSDP data parallelism only reports `rank`).
-* **`cycle<N>`**: added for the 2nd+ cycle of a scheduled run (see above).
+* **`cycle<N>`/`mb<M>`**: for scheduled runs (see above), the cycle index and the value of the
+  profiler's step counter when the cycle was flushed -- a mini-batch index in the Actor update
+  loop, a training step in SFT. An unscheduled run writes a single file per step, with no suffix.
+
+### Telling stages apart
+
+`discrete` decides whether the stage shows up in the file name or inside the trace:
+
+* **`discrete: True`** writes one file per stage, and the stage lands in `scope`:
+  `actor-rollout-ref_actor-update_step2_rank0-of-8_pid123_<ts>.json.gz`,
+  plus siblings for `actor-compute-log-prob`, `ref-compute-log-prob`, `train-batch` and so on.
+  Use this when you want to attribute time to a stage from the file name alone.
+* **`discrete: False`** (the default) collects the whole training step into one trace per
+  process, so `scope` is `e2e` and cannot name a single stage. The stages are still separated
+  *inside* the trace: each profiled stage is wrapped in a `torch.profiler.record_function`
+  named after the worker method it runs (`update_actor`, `compute_log_prob`,
+  `compute_ref_log_prob`, `train_batch`, ...), so searching for that name in Perfetto/Chrome
+  tracing gives the stage's window.
+
+Rollout is profiled by the inference engine rather than by the training worker: with Agent
+Loop its traces are written to `<save_path>/agent_loop_rollout_replica_<n>/` by vLLM/SGLang,
+so they never share a file with actor or ref work.
+
+Note that verl asks the profiler to write exactly `<stem>.json.gz`. If your files carry an
+extra segment (e.g. `<stem>.json.1785391501.gz`), it was added after the fact by whatever
+post-processes or uploads them, such as a `finish_hook_cmd`.
 
 ## Visualization
 

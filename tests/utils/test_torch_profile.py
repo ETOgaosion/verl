@@ -100,6 +100,79 @@ class TestTorchProfile(unittest.TestCase):
         mock_prof_instance.stop.assert_called_once()
 
     @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
+    def test_start_forwards_training_step(self, mock_get_profiler):
+        # The trainer reports the profiled step as start_profile(profile_step=...); it must reach
+        # the filename, otherwise traces from different steps cannot be told apart.
+        mock_get_profiler.return_value = MagicMock()
+        tool_config = TorchProfilerToolConfig(contents=["cpu"], discrete=False)
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+
+        profiler.start(role="e2e", profile_step=3)
+        _, kwargs = mock_get_profiler.call_args
+        self.assertEqual(kwargs["profile_step"], 3)
+        self.assertEqual(kwargs["role"], "e2e")
+        profiler.stop()
+
+    @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
+    def test_discrete_annotate_names_stage_and_step(self, mock_get_profiler):
+        # Discrete mode opens one profiler per stage from annotate(), long after start(): the
+        # stage name and the training step recorded at start() must both reach the filename.
+        mock_get_profiler.return_value = MagicMock()
+        tool_config = TorchProfilerToolConfig(contents=["cpu"], discrete=True)
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+        profiler.start(role="e2e", profile_step=5)
+
+        @profiler.annotate(role="actor_update")
+        def update_actor():
+            return "done"
+
+        # An unlabeled stage falls back to the wrapped function's name.
+        @profiler.annotate()
+        def compute_log_prob():
+            return "done"
+
+        self.assertEqual(update_actor(), "done")
+        _, kwargs = mock_get_profiler.call_args
+        self.assertEqual(kwargs["role"], "actor_update")
+        self.assertEqual(kwargs["profile_step"], 5)
+
+        self.assertEqual(compute_log_prob(), "done")
+        _, kwargs = mock_get_profiler.call_args
+        self.assertEqual(kwargs["role"], "compute_log_prob")
+
+    @patch("torch.profiler.schedule")
+    @patch("torch.profiler.profile")
+    def test_scheduled_trace_files_identify_cycle_and_mini_batch(self, mock_profile, mock_schedule):
+        # A scheduled run flushes once per cycle, each covering different mini-batches. Every
+        # file must say which cycle it is and which mini-batch the cycle ended on.
+        with tempfile.TemporaryDirectory() as save_path:
+            get_torch_profiler(
+                contents=["cpu"],
+                save_path=save_path,
+                role="e2e",
+                save_file_prefix="actor",
+                rank=0,
+                profile_step=2,
+                schedule={"skip_first": 0, "wait": 1, "warmup": 1, "active": 2, "repeat": 2},
+            )
+            _, kwargs = mock_profile.call_args
+            on_trace_ready = kwargs["on_trace_ready"]
+
+            names = []
+            for step_num in (4, 8):
+                mock_prof = MagicMock()
+                mock_prof.step_num = step_num
+                on_trace_ready(mock_prof)
+                (out_path,), _ = mock_prof.export_chrome_trace.call_args
+                names.append(os.path.basename(out_path))
+
+            self.assertTrue(names[0].startswith("actor_e2e_step2_rank0_"))
+            self.assertTrue(names[0].endswith("_cycle0_mb4.json.gz"))
+            self.assertTrue(names[1].endswith("_cycle1_mb8.json.gz"))
+
+    @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
     def test_discrete_mode(self, mock_get_profiler):
         # Mock for discrete mode
         mock_prof_instance = MagicMock()
@@ -279,6 +352,19 @@ class TestTorchProfile(unittest.TestCase):
         self.assertIn("rank5-of-16", name)
         self.assertIn("tp1-pp0-dp2-cp0", name)
         self.assertIn(f"pid{os.getpid()}", name)
+
+    def test_build_trace_basename_encodes_training_step(self):
+        # Without the step, traces from different profiled steps are only distinguishable by
+        # their wall-clock timestamp, which is unreadable when several steps are profiled.
+        name = build_trace_basename(
+            rank=0, role="e2e", save_file_prefix="actor", profile_step=7, topology={"rank": 0, "world_size": 8}
+        )
+        self.assertTrue(name.startswith("actor_e2e_step7_rank0-of-8_"))
+
+    def test_build_trace_basename_omits_step_when_unknown(self):
+        name = build_trace_basename(rank=0, role="e2e", save_file_prefix="actor", topology={})
+        self.assertTrue(name.startswith("actor_e2e_rank0_"))
+        self.assertNotIn("step", name)
 
     def test_build_trace_basename_distinguishes_roles_same_rank(self):
         # The original scheme collided ref/critic at the same rank; the role prefix fixes it.
