@@ -106,12 +106,26 @@ actor_rollout_ref:
 
 When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance data for the Rollout phase **must be collected using discrete mode**. In this case, the Profiler is triggered by the inference engine backend.
 
-1. Rank Definition: ranks in the Rollout configuration refers to Replica Rank (inference instance index), not Global Rank.
+1. Rank Definition: ranks in the Rollout configuration refers to Replica Rank (inference instance
+   index), not Global Rank. A run has `rollout.nnodes * rollout.n_gpus_per_node /
+   rollout.tensor_model_parallel_size` replicas, so with 2 nodes of 8 GPUs at `tp=2` the valid
+   values are `0`-`7`. Values outside that range never match a replica and are silently ignored,
+   which is easy to hit when copying `ranks` from a training role, where they are global ranks.
 
 2. Inference Engine Support: Currently, vLLM and SGLang engines are supported without additional settings. Specific details are as follows:
 
    *   **vLLM Engine**: Automatically collects AsyncLLM scheduling stacks and inference process performance data.
    *   **SGLang Engine**: Automatically collects inference process performance data. Does not support the memory option in contents.
+
+3. Collection Window: rollout replicas are profiled for the whole training step. Generation is
+   decoupled from the step in the V1 trainer -- prompts are served asynchronously and consumed from
+   the replay buffer -- so there is no single generation call to wrap.
+
+4. Trace Location: each replica writes to its own
+   `<save_path>/agent_loop_rollout_replica_<n>/` directory on the node that hosts it, and
+   `finish_hook_cmd` runs there with `VERL_PROFILE_SAVE_PATH` pointing at that directory. Set the
+   hook if you need the traces collected somewhere central, since nothing else moves them off the
+   replica's node.
 
 ### 3. Scheduled Collection (`wait`/`warmup`/`active`/`repeat`)
 
@@ -187,6 +201,20 @@ Note that verl asks the profiler to write exactly `<stem>.json.gz`. If your file
 extra segment (e.g. `<stem>.json.1785391501.gz`), it was added after the fact by whatever
 post-processes or uploads them, such as a `finish_hook_cmd`.
 
+## Traces with no GPU kernels
+
+If a trace only contains CPU operators and no CUDA kernels, the profiler's CUPTI subscription
+most likely lost a race. CUPTI accepts a single subscriber per process, and some CUDA images
+install a startup hook that points `NVTX_INJECTION64_PATH` at `libcupti.so`. The first NVTX range
+in the process then loads libcupti as the NVTX handler and takes that slot, after which Kineto
+fails with `CUPTI_ERROR_MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED` and drops every CUDA activity. verl
+emits NVTX ranges itself, so `NCCL_NVTX_DISABLE=1` does not avoid it.
+
+verl therefore points `NVTX_INJECTION64_PATH` at an unloadable path for all workers when
+`global_profiler.tool=torch`, and logs a warning when it does. Set `VERL_KEEP_NVTX_INJECTION=1`
+to keep the inherited value, e.g. when you rely on that injection for another tool and accept
+traces without CUDA activity.
+
 ## Visualization
 
 Collected trace files (usually `.json` or `.json.gz`) are stored flat in the configured
@@ -202,8 +230,10 @@ To ship the traces somewhere after each profiled step, set the hook once on `glo
 ```
 
 The hook prints the command, its output and its exit code to the worker's log on every
-`stop_profile`. See [Nsight Systems profiling](nsight_profiling.md) for the full description of
-the hook, including how to choose which ranks run it.
+`stop_profile`. Rollout replicas run it from their own server actor once the engine has flushed,
+with `VERL_PROFILE_SAVE_PATH` set to that replica's `agent_loop_rollout_replica_<n>` directory.
+See [Nsight Systems profiling](nsight_profiling.md) for the full description of the hook,
+including how to choose which ranks run it.
 
 You can visualize them using:
 

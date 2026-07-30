@@ -463,6 +463,10 @@ class TRTLLMHttpServer:
     async def stop_profile(self):
         if self.profiler_controller.check_enable() and self.profiler_controller.check_this_rank():
             await self.llm.collective_rpc("stop_profile")
+            # The engine writes traces directly, bypassing DistProfiler.stop(), so the finish
+            # hook has to be triggered here. Running it from this actor also keeps it on the
+            # node that holds the trace files.
+            self.profiler_controller.run_finish_hook()
 
     def _init_profiler_controller(self) -> DistProfiler:
         profiler_config = self.config.profiler

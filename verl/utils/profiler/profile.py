@@ -217,14 +217,30 @@ class DistProfiler:
             self._run_finish_hook()
         return result
 
-    def _run_finish_hook(self) -> None:
+    def run_finish_hook(self, save_path: Optional[str] = None) -> None:
+        """Run the finish hook for backends that are not driven through ``start()``/``stop()``.
+
+        Inference servers (vLLM, SGLang) ask their own engine to start and stop profiling
+        instead of going through this class, so ``stop()`` never runs and the hook would
+        never fire. They call this once the engine has flushed its traces to disk, which
+        also guarantees the hook runs on the node that actually holds the trace files.
+
+        Args:
+            save_path (Optional[str]): Directory reported to the hook, overriding the
+                configured ``save_path``. Engines write per-replica sub-directories, so they
+                pass the one they wrote to and hooks stay usable without recursing.
+        """
+        if self.check_enable():
+            self._run_finish_hook(save_path=save_path)
+
+    def _run_finish_hook(self, save_path: Optional[str] = None) -> None:
         """Relocate backend artifacts and run the user's finish command when profiling stops.
 
         Fires on every ``stop()`` (i.e. once per profiled step). Relocation happens on the ranks that
         actually profiled (that is where artifacts live); the user command runs on the finish-hook ranks.
         Both steps are best-effort: failures are reported and never interrupt training.
         """
-        save_path = getattr(self.config, "save_path", None)
+        save_path = save_path or getattr(self.config, "save_path", None)
 
         _hook_print(
             f"rank {self.rank}: profiler stopped; cmd={self._finish_hook_cmd!r}, "

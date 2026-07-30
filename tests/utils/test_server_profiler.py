@@ -14,7 +14,9 @@
 
 import json
 import os
+import tempfile
 import unittest
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from verl.utils.profiler.config import (
@@ -23,7 +25,9 @@ from verl.utils.profiler.config import (
     TorchProfilerToolConfig,
     build_sglang_profiler_args,
     build_vllm_profiler_args,
+    rollout_trace_dir,
 )
+from verl.utils.profiler.profile import DistProfiler
 
 
 class TestServerProfilerArgs(unittest.TestCase):
@@ -52,6 +56,26 @@ class TestServerProfilerArgs(unittest.TestCase):
             self.assertEqual(profiler_config_dict["delay_iterations"], 0)
             self.assertEqual(profiler_config_dict["max_iterations"], 0)
 
+    def test_build_vllm_profiler_args_skips_legacy_env(self):
+        """vLLM >= 0.13.0 rejects the VLLM_TORCH_PROFILER_* names, so they must stay unset."""
+        tool_config = TorchProfilerToolConfig(contents=["stack"])
+        config = ProfilerConfig(save_path="/tmp/test", tool_config=tool_config)
+
+        with patch.dict(os.environ, {}, clear=True):
+            args = build_vllm_profiler_args(config, tool_config, rank=0, legacy_env=False)
+
+            for name in (
+                "VLLM_TORCH_PROFILER_DIR",
+                "VLLM_TORCH_PROFILER_WITH_STACK",
+                "VLLM_TORCH_PROFILER_RECORD_SHAPES",
+                "VLLM_TORCH_PROFILER_WITH_PROFILE_MEMORY",
+            ):
+                self.assertNotIn(name, os.environ)
+
+            # The argument-based config is still built.
+            profiler_config_dict = json.loads(args["profiler_config"])
+            self.assertEqual(profiler_config_dict["torch_profiler_dir"], "/tmp/test/agent_loop_rollout_replica_0")
+
     def test_build_vllm_profiler_args_with_profile_window(self):
         tool_config = TorchProfilerToolConfig(contents=["stack"], profile_token_start=12, profile_token_end=46)
         config = ProfilerConfig(save_path="/tmp/test", tool_config=tool_config)
@@ -68,6 +92,17 @@ class TestServerProfilerArgs(unittest.TestCase):
         profiler_config_dict = json.loads(args["profiler_config"])
         self.assertEqual(profiler_config_dict["delay_iterations"], 5)
         self.assertEqual(profiler_config_dict["max_iterations"], 8)
+
+    def test_rollout_trace_dir_matches_what_the_engines_write_to(self):
+        """The finish hook derives its directory from this helper, so it must not drift."""
+        tool_config = TorchProfilerToolConfig(contents=["cpu"])
+        config = ProfilerConfig(save_path="/tmp/test", tool_config=tool_config)
+        expected = rollout_trace_dir(config, rank=2)
+
+        self.assertEqual(build_sglang_profiler_args(config, tool_config, rank=2)["output_dir"], expected)
+        with patch.dict(os.environ, {}, clear=True):
+            args = build_vllm_profiler_args(config, tool_config, rank=2, legacy_env=False)
+        self.assertEqual(json.loads(args["profiler_config"])["torch_profiler_dir"], expected)
 
     def test_build_sglang_profiler_args(self):
         # Case 1: Basic features
@@ -89,6 +124,61 @@ class TestServerProfilerArgs(unittest.TestCase):
         self.assertEqual(args["num_steps"], 9)
 
 
+class TestRolloutFinishHook(unittest.TestCase):
+    """The rollout finish hook is what moves engine traces off the node they were written on."""
+
+    def _config(self, save_path: str, cmd: str, **kwargs) -> ProfilerConfig:
+        return ProfilerConfig(
+            tool="torch",
+            enable=True,
+            ranks=[0],
+            save_path=save_path,
+            tool_config=TorchProfilerToolConfig(contents=["cpu"], discrete=True),
+            finish_hook_cmd=cmd,
+            **kwargs,
+        )
+
+    def test_run_finish_hook_runs_command_without_going_through_stop(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            marker = os.path.join(save_path, "hook_ran")
+            profiler = DistProfiler(rank=0, config=self._config(save_path, f"touch {marker}"))
+
+            profiler.run_finish_hook()
+
+            self.assertTrue(os.path.exists(marker))
+
+    def test_run_finish_hook_exports_save_path_to_the_command(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            out = os.path.join(save_path, "env")
+            profiler = DistProfiler(rank=0, config=self._config(save_path, f'echo "$VERL_PROFILE_SAVE_PATH" > {out}'))
+
+            profiler.run_finish_hook()
+
+            with open(out) as f:
+                self.assertEqual(f.read().strip(), save_path)
+
+    def test_run_finish_hook_reports_the_engine_trace_dir(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            out = os.path.join(save_path, "env")
+            replica_dir = os.path.join(save_path, "agent_loop_rollout_replica_2")
+            profiler = DistProfiler(rank=0, config=self._config(save_path, f'echo "$VERL_PROFILE_SAVE_PATH" > {out}'))
+
+            profiler.run_finish_hook(save_path=replica_dir)
+
+            with open(out) as f:
+                self.assertEqual(f.read().strip(), replica_dir)
+
+    def test_run_finish_hook_skips_unselected_ranks(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            marker = os.path.join(save_path, "hook_ran")
+            config = self._config(save_path, f"touch {marker}", finish_hook_ranks=[3])
+            profiler = DistProfiler(rank=0, config=config)
+
+            profiler.run_finish_hook()
+
+            self.assertFalse(os.path.exists(marker))
+
+
 class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
     async def test_vllm_start_stop_profile(self):
         try:
@@ -103,14 +193,17 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         mock_profiler.check_enable.return_value = True
         mock_profiler.check_this_rank.return_value = True
         mock_profiler.is_discrete_mode.return_value = True
+        mock_profiler.config = ProfilerConfig(save_path="/tmp/test", tool_config=None)
 
         mock_engine = AsyncMock()
 
         # Mock self object
         mock_self = MagicMock()
         mock_self.node_rank = 0
+        mock_self.replica_rank = 3
         mock_self.profiler_controller = mock_profiler
         mock_self.engine = mock_engine
+        mock_self._should_profile = partial(vLLMHttpServer._should_profile, mock_self)
 
         # Test start_profile using the unbound method
         await vLLMHttpServer.start_profile(mock_self)
@@ -119,6 +212,34 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         # Test stop_profile
         await vLLMHttpServer.stop_profile(mock_self)
         mock_engine.stop_profile.assert_called_once()
+        # The engine bypasses DistProfiler.stop(), so the server must fire the finish hook itself,
+        # otherwise rollout traces are never uploaded. It reports the replica sub-directory it
+        # actually wrote to, not the shared parent.
+        mock_profiler.run_finish_hook.assert_called_once_with(save_path="/tmp/test/agent_loop_rollout_replica_3")
+
+    async def test_vllm_stop_profile_skips_finish_hook_when_not_profiled(self):
+        try:
+            from verl.workers.rollout.vllm_rollout.vllm_async_server import vLLMHttpServer
+        except ImportError:
+            self.skipTest("vllm or dependencies not installed")
+            return
+
+        mock_profiler = MagicMock()
+        mock_profiler.check_enable.return_value = True
+        mock_profiler.check_this_rank.return_value = False
+        mock_profiler.is_discrete_mode.return_value = True
+
+        mock_engine = AsyncMock()
+
+        mock_self = MagicMock()
+        mock_self.node_rank = 0
+        mock_self.profiler_controller = mock_profiler
+        mock_self.engine = mock_engine
+        mock_self._should_profile = partial(vLLMHttpServer._should_profile, mock_self)
+
+        await vLLMHttpServer.stop_profile(mock_self)
+        mock_engine.stop_profile.assert_not_called()
+        mock_profiler.run_finish_hook.assert_not_called()
 
     async def test_vllm_start_stop_profile_non_master_node(self):
         try:
@@ -138,6 +259,7 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         mock_self.node_rank = 1  # non-master node, should skip
         mock_self.profiler_controller = mock_profiler
         mock_self.engine = mock_engine
+        mock_self._should_profile = partial(vLLMHttpServer._should_profile, mock_self)
 
         await vLLMHttpServer.start_profile(mock_self)
         mock_engine.start_profile.assert_not_called()
@@ -158,7 +280,7 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         mock_profiler.check_enable.return_value = True
         mock_profiler.check_this_rank.return_value = True
         mock_profiler.is_discrete_mode.return_value = True
-        mock_profiler.config = MagicMock()
+        mock_profiler.config = ProfilerConfig(save_path="/tmp/test", tool_config=None)
         mock_profiler.tool_config = MagicMock()
 
         mock_tokenizer_manager = AsyncMock()
@@ -182,6 +304,7 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
             # Test stop_profile
             await SGLangHttpServer.stop_profile(mock_self)
             mock_tokenizer_manager.stop_profile.assert_called_once()
+            mock_profiler.run_finish_hook.assert_called_once_with(save_path="/tmp/test/agent_loop_rollout_replica_0")
 
 
 if __name__ == "__main__":

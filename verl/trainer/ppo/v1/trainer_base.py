@@ -1275,6 +1275,15 @@ class PPOTrainer(ABC):
 
         return metric_dict
 
+    def _rollout_server_managers(self) -> list:
+        """LLM server managers whose inference engines take part in rollout profiling.
+
+        Subclasses owning additional replicas (e.g. the standalone rollout of separate-async
+        training) extend this list so those engines are profiled as well.
+        """
+        managers = [getattr(self, "llm_server_manager", None)]
+        return [manager for manager in managers if manager is not None]
+
     def _start_profiling(self) -> None:
         """Start profiling for all worker groups if profiling is enabled."""
         do_profile = (
@@ -1289,6 +1298,11 @@ class PPOTrainer(ABC):
                 self.ref_policy_wg.start_profile(profile_step=self.global_steps)
             if self.use_critic:
                 self.critic_wg.start_profile(profile_step=self.global_steps)
+            # Rollout generation is decoupled from the training step in V1 (prompts are served
+            # asynchronously and consumed from the replay buffer), so the inference engines are
+            # profiled across the whole step rather than around a single generation call.
+            for manager in self._rollout_server_managers():
+                manager.start_profile()
 
     def _stop_profiling(self) -> None:
         """Stop profiling for all worker groups if profiling is enabled."""
@@ -1311,6 +1325,8 @@ class PPOTrainer(ABC):
                 self.ref_policy_wg.stop_profile()
             if self.use_critic:
                 self.critic_wg.stop_profile()
+            for manager in self._rollout_server_managers():
+                manager.stop_profile()
 
     def _fetch_one_gen_batch(self) -> TensorDict:
         """Fetch one ``gen_batch_size`` chunk from the dataloader."""

@@ -295,7 +295,18 @@ class ProfilerConfig(BaseConfig):
         )
 
 
-def build_vllm_profiler_args(profiler_config: ProfilerConfig, tool_config: BaseConfig, rank: int) -> dict:
+def rollout_trace_dir(profiler_config: ProfilerConfig, rank: int) -> str:
+    """Return the directory an inference engine writes the traces of ``rank`` to.
+
+    Engine-side profiling is per replica, so each replica gets its own sub-directory of
+    ``save_path`` instead of writing into the flat layout the training workers use.
+    """
+    return os.path.join(profiler_config.save_path, f"agent_loop_rollout_replica_{rank}")
+
+
+def build_vllm_profiler_args(
+    profiler_config: ProfilerConfig, tool_config: BaseConfig, rank: int, legacy_env: bool = True
+) -> dict:
     """
     Build arguments and environment variables for vLLM profiler.
 
@@ -306,6 +317,10 @@ def build_vllm_profiler_args(profiler_config: ProfilerConfig, tool_config: BaseC
         profiler_config (ProfilerConfig): The unified profiler configuration.
         tool_config (BaseConfig): The tool configuration.
         rank (int): The rank of the replica.
+        legacy_env (bool): Whether to export the ``VLLM_TORCH_PROFILER_*`` environment variables,
+            which is how vLLM < 0.13.0 is configured. Newer versions read the returned
+            ``profiler_config`` argument instead and reject these names as unknown, so callers
+            running vLLM >= 0.13.0 should pass False to avoid noisy startup warnings.
 
     Returns:
         dict: A dictionary of arguments to be passed to vLLM's start_profile method.
@@ -317,13 +332,14 @@ def build_vllm_profiler_args(profiler_config: ProfilerConfig, tool_config: BaseC
     with_stack = True if "stack" in contents or "module" in contents else False
     record_shapes = True if "shapes" in contents else False
     with_memory = True if "memory" in contents else False
-    save_path = os.path.join(profiler_config.save_path, f"agent_loop_rollout_replica_{rank}")
+    save_path = rollout_trace_dir(profiler_config, rank)
 
     # vLLM < 0.13.0 supports controlling profiler via environment variables
-    os.environ["VLLM_TORCH_PROFILER_DIR"] = save_path
-    os.environ["VLLM_TORCH_PROFILER_WITH_STACK"] = "1" if with_stack else "0"
-    os.environ["VLLM_TORCH_PROFILER_RECORD_SHAPES"] = "1" if record_shapes else "0"
-    os.environ["VLLM_TORCH_PROFILER_WITH_PROFILE_MEMORY"] = "1" if with_memory else "0"
+    if legacy_env:
+        os.environ["VLLM_TORCH_PROFILER_DIR"] = save_path
+        os.environ["VLLM_TORCH_PROFILER_WITH_STACK"] = "1" if with_stack else "0"
+        os.environ["VLLM_TORCH_PROFILER_RECORD_SHAPES"] = "1" if record_shapes else "0"
+        os.environ["VLLM_TORCH_PROFILER_WITH_PROFILE_MEMORY"] = "1" if with_memory else "0"
 
     # vLLM >= 0.13.0 supports controlling profiler via arguments.
     # While it maintains backward compatibility with environment variables,
@@ -381,7 +397,7 @@ def build_sglang_profiler_args(profiler_config: ProfilerConfig, tool_config: Bas
     )
 
     return {
-        "output_dir": os.path.join(profiler_config.save_path, f"agent_loop_rollout_replica_{rank}"),
+        "output_dir": rollout_trace_dir(profiler_config, rank),
         "with_stack": "stack" in contents or "module" in contents,
         "record_shapes": "shapes" in contents,
         "start_step": start_step,
