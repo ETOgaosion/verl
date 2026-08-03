@@ -256,7 +256,10 @@ class NsightSystemsProfiler(DistProfiler):
         def decorator(func):
             @functools.wraps(func)
             def wrapper(*args, **kwargs_inner):
-                profile_name = message or func.__name__
+                # Prefer the stage label (`role`, e.g. "actor_compute_log_prob"): it names both the
+                # role and the function, which the method name alone cannot do for a colocated
+                # worker. Fall back to the method name for stages that declare no role.
+                profile_name = message or kwargs_outer.get("role") or func.__name__
 
                 if self.discrete:
                     get_platform().profiler_start()

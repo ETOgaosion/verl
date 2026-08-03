@@ -1,6 +1,6 @@
 # PyTorch Profiling in verl
 
-Last updated: 07/30/2026.
+Last updated: 07/31/2026.
 
 This guide explains how to use the native [PyTorch Profiler](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) for profiling verl training runs.
 
@@ -28,27 +28,32 @@ Each RL role (Actor, Critic, etc.) has its own `profiler` configuration:
 
 You can customize the PyTorch Profiler behavior using the following fields under `tool_config.torch`:
 
-* **`contents`**: List of contents to profile.
-    *   **`cpu`**: Profile CPU activities.
+* **`contents`**: List of contents to profile. An empty list (the default) collects everything.
+    *   **`cpu`**: Profile CPU activities. Collected whether or not you list it: operator names and
+        verl's per-stage markers are CPU-side events, so a device-only trace would be bare kernels
+        with no way to tell which stage they belong to. Listing it is therefore redundant, and the
+        rest of `contents` is honored as written.
     *   **`cuda`**: Profile CUDA activities.
     *   **`memory`**: Track tensor memory allocation/free.
     *   **`shapes`**: Record shapes of operator inputs.
     *   **`stack`**: Record source code file and line number.
 * **`profile_token_start`**: Effective only for the rollout role; defines the start response-token index for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
 * **`profile_token_end`**: Effective only for the rollout role; defines the stop response-token index (exclusive) for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
-* **`schedule`**: (Advanced) Enables [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) so that only part of each profiling window is recorded. It only takes effect when `active > 0`; otherwise the profiler collects continuously (the default). verl advances the schedule by calling `profiler.step()` once per mini-batch in the Actor update loop (and once per step in SFT), so a scheduled cycle is measured in mini-batches. The fields mirror the official PyTorch API:
-    *   **`skip_first`**: Number of initial steps to ignore before the first cycle begins.
-    *   **`wait`**: Steps to idle (no collection) at the start of each cycle.
-    *   **`warmup`**: Steps to trace but discard, letting the profiler stabilize, each cycle.
-    *   **`active`**: Steps to actively record each cycle. Set `<= 0` (default) to disable scheduling.
-    *   **`repeat`**: Number of cycles to record. `0` (default) repeats until profiling stops.
+* **`schedule`**: (Advanced) Enables [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) so that only part of the Actor update loop is recorded. It only takes effect when `active > 0`; otherwise the profiler collects continuously (the default). verl advances the schedule by calling `profiler.step()` once per mini-batch, so **every field below counts mini-batches**, not RL steps. The fields mirror the official PyTorch API, whose `steps` are these mini-batches:
+    *   **`skip_first`**: Number of initial mini-batches to ignore before the first `wait` begins.
+    *   **`wait`**: Mini-batches to idle (no collection) before each recording.
+    *   **`warmup`**: Mini-batches to trace but discard, letting the profiler stabilize, before each recording.
+    *   **`active`**: Mini-batches to actively record, and therefore how many mini-batches each trace file holds. Set `<= 0` (default) to disable scheduling.
+    *   **`repeat`**: How many times to run `wait -> warmup -> active`, i.e. how many trace files one profiled RL step produces. `0` (default) keeps repeating until profiling stops.
 
 
 ## Examples
 
-### 1. End-to-End Collection
+### 1. Whole-Step Collection
 
-Collects performance data for all steps in a single trace file.
+Collects one trace file per profiled RL step per process, holding everything that process ran
+during the step. Note that this is the whole step *as seen by one worker*, not the whole RL
+system: see [What one RL step looks like on disk](#what-one-rl-step-looks-like-on-disk).
 
 ```yaml
 global_profiler:
@@ -69,7 +74,7 @@ actor_rollout_ref:
 
 ### 2. Discrete Mode Collection
 
-Discrete mode saves separate trace files for each step. This is useful for detailed analysis and is **mandatory** when using Agent Loop.
+Discrete mode saves a separate trace file per stage within each profiled step. This is useful for detailed analysis and is **mandatory** when using Agent Loop.
 
 **Configuration Example**
 
@@ -129,7 +134,7 @@ When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance d
 
 ### 3. Scheduled Collection (`wait`/`warmup`/`active`/`repeat`)
 
-For long update loops with many mini-batches (e.g. large gradient accumulation), you usually don't need to trace every mini-batch. A `schedule` records only a few mini-batches per cycle, keeping traces small while still capturing steady-state behavior. verl calls `profiler.step()` once per mini-batch so the schedule advances automatically.
+For long update loops with many mini-batches (e.g. large gradient accumulation), you usually don't need to trace every mini-batch. A `schedule` records only a few mini-batches at a time, keeping traces small while still capturing steady-state behavior. verl calls `profiler.step()` once per mini-batch so the schedule advances automatically.
 
 ```yaml
 actor_rollout_ref:
@@ -143,16 +148,19 @@ actor_rollout_ref:
           contents: [cpu, cuda]
           schedule:
             skip_first: 1  # ignore the very first mini-batch
-            wait: 1        # then idle 1 mini-batch at the start of each cycle
+            wait: 1        # then idle 1 mini-batch before recording
             warmup: 1      # warm up 1 mini-batch (traced but discarded)
             active: 3      # record 3 mini-batches
-            repeat: 2      # capture 2 such cycles, then stop collecting
+            repeat: 2      # record two such groups, then stop collecting
   # rollout & ref follow actor settings
 ```
 
-With the configuration above, within each profiled training step verl skips the first mini-batch, then runs two cycles of `wait(1) -> warmup(1) -> active(3)`, producing two trace files suffixed `_cycle0_mb<N>` and `_cycle1_mb<N>`, where `mb<N>` is the mini-batch the cycle ended on. If a training step has fewer mini-batches than the schedule needs, only the mini-batches that were reached are recorded.
+With the configuration above, within each profiled RL step verl skips mini-batch 0, then runs
+`wait(1) -> warmup(1) -> active(3)` twice, producing two trace files: one holding mini-batches
+3-5 (suffix `_mb3-5`) and one holding mini-batches 8-10 (suffix `_mb8-10`). If the update loop has
+fewer mini-batches than the schedule needs, only the mini-batches that were reached are recorded.
 
-`schedule` only applies to the training update loop (Actor RL update and SFT). It is a no-op for the rollout engine side, which uses `profile_token_start`/`profile_token_end` instead.
+`schedule` only applies to the training update loop. It is a no-op for the rollout engine side, which uses `profile_token_start`/`profile_token_end` instead. SFT has no mini-batch loop and advances the schedule once per training step, so there each unit is one `train_batch` call.
 
 ## Output file naming
 
@@ -160,46 +168,88 @@ Because profiling runs in every training process, each trace file is named so it
 attributed to a specific process without opening it. The stem is:
 
 ```
-[<role>_][<scope>_][step<S>_]rank<r>[-of-<world>][_tp<..>-pp<..>-dp<..>-cp<..>]_pid<pid>_<timestamp>[_cycle<N>[_mb<M>]].json.gz
+[<role>_][<scope>_][step<S>_]rank<r>[-of-<world>][_tp<..>-pp<..>-dp<..>-cp<..>]_pid<pid>_<timestamp>[_mb<A>[-<B>]].json.gz
 ```
 
 * **`role`**: the worker role (e.g. `actor`, `ref`, `value-model` for the critic), so results
   from different roles at the same rank are distinguishable. A colocated hybrid worker reports
   its combined role, `actor-rollout-ref` (underscores in labels become hyphens, since underscore
   separates the fields).
-* **`scope`**: the profiled region passed to `start_profile`/`annotate` (e.g. `e2e` for a whole
-  training step, or a stage name such as `actor-update` in discrete mode).
-* **`step<S>`**: the training step (`global_steps`) being profiled, i.e. one of
-  `global_profiler.steps`.
+* **`scope`**: the profiled region passed to `start_profile`/`annotate` -- `train` for a training
+  worker's whole-step window, or a stage name such as `actor-update` in discrete mode.
+* **`step<S>`**: the RL step (`global_steps`) being profiled, i.e. one of `global_profiler.steps`.
 * **`rank`/`world`**: the global `torch.distributed` rank and world size.
 * **`tp/pp/dp/cp`**: tensor/pipeline/data/context parallel ranks, included when Megatron's
   parallel state is initialized (plain FSDP data parallelism only reports `rank`).
-* **`cycle<N>`/`mb<M>`**: for scheduled runs (see above), the cycle index and the value of the
-  profiler's step counter when the cycle was flushed -- a mini-batch index in the Actor update
-  loop, a training step in SFT. An unscheduled run writes a single file per step, with no suffix.
+* **`mb<A>[-<B>]`**: for scheduled runs only, the mini-batches of the update loop this file
+  actually contains, counted from the start of the profiled RL step. `_mb3-5` means the trace
+  holds mini-batches 3, 4 and 5 of RL step `<S>`. An unscheduled run collects the whole RL step
+  into one file and adds no suffix.
+
+### What one RL step looks like on disk
+
+No single trace file covers a whole RL step end to end, because the step does not run in a
+single process. A profiled step leaves you with:
+
+* **Training-side traces** (`scope` = `train`), written by the actor/ref/critic workers. These
+  hold the work those workers actually run: the log-prob forwards and the actor update's
+  forward/backward/optimizer. This is why the scope is called `train` and not `e2e`.
+* **Rollout traces**, written by the inference engines themselves into
+  `<save_path>/agent_loop_rollout_replica_<n>/`, on the node hosting each replica. Generation
+  never appears in a training-side trace: with Agent Loop the engines run in their own
+  processes, and in the V1 trainer generation is decoupled from the step entirely (the trainer
+  samples already-generated data from the replay buffer), so the actor process is simply idle
+  while the rollout happens.
+
+To reason about the full step, read the timings that the trainer logs (`gen`, `old_log_prob`,
+`ref`, `update_actor`, ...) and open the per-process traces for whichever part you're drilling
+into. Trace timestamps are wall clock, so training and rollout traces from the same step can be
+lined up side by side in Perfetto.
 
 ### Telling stages apart
 
-`discrete` decides whether the stage shows up in the file name or inside the trace:
+Within a training-side trace, `discrete` decides whether the stage shows up in the file name or
+inside the trace:
 
 * **`discrete: True`** writes one file per stage, and the stage lands in `scope`:
   `actor-rollout-ref_actor-update_step2_rank0-of-8_pid123_<ts>.json.gz`,
   plus siblings for `actor-compute-log-prob`, `ref-compute-log-prob`, `train-batch` and so on.
   Use this when you want to attribute time to a stage from the file name alone.
-* **`discrete: False`** (the default) collects the whole training step into one trace per
-  process, so `scope` is `e2e` and cannot name a single stage. The stages are still separated
-  *inside* the trace: each profiled stage is wrapped in a `torch.profiler.record_function`
-  named after the worker method it runs (`update_actor`, `compute_log_prob`,
-  `compute_ref_log_prob`, `train_batch`, ...), so searching for that name in Perfetto/Chrome
-  tracing gives the stage's window.
-
-Rollout is profiled by the inference engine rather than by the training worker: with Agent
-Loop its traces are written to `<save_path>/agent_loop_rollout_replica_<n>/` by vLLM/SGLang,
-so they never share a file with actor or ref work.
+* **`discrete: False`** (the default) collects the worker's whole step into one trace, so
+  `scope` is `train` and cannot name a single stage. The stages are still separated *inside* the
+  trace: each one is wrapped in a `torch.profiler.record_function` carrying its stage label, which
+  names the role and the function together -- `actor_compute_log_prob`, `ref_compute_log_prob`,
+  `actor_update` -- so searching for it in Perfetto/Chrome tracing gives that stage's window.
+  Stages that declare no role, such as the inner engine's `train_batch`, appear under the method
+  name.
 
 Note that verl asks the profiler to write exactly `<stem>.json.gz`. If your files carry an
 extra segment (e.g. `<stem>.json.1785391501.gz`), it was added after the fact by whatever
 post-processes or uploads them, such as a `finish_hook_cmd`.
+
+### Missing roles or stages
+
+Seeing a single `actor...` file per rank, with no separate reference/critic file and no
+`compute_log_prob` anywhere, is usually one of the following rather than a lost trace:
+
+* **One file per process, not per role.** The PyTorch profiler is process-global, so a colocated
+  hybrid worker records actor *and* reference work into one trace named after the combined role
+  (`actor-rollout-ref`). A separate file appears only for a role that runs in its own process,
+  e.g. a critic (`value-model`), or a reference model that is not colocated.
+* **The hybrid worker follows `actor.profiler`.** It builds its profiler from
+  `actor_rollout_ref.actor.profiler`, so `ref.profiler.enable: True` on its own profiles nothing,
+  and turning the actor's profiler off also drops the reference stages that share the process.
+* **The role may not exist.** There is no critic unless the algorithm uses a value model (GRPO
+  and friends do not), and no reference model unless a KL term needs one.
+* **Traces collected before CPU activity became unconditional.** A device-only run
+  (`contents: [cuda]` on an older verl) has no `record_function` ranges and no operator names, so
+  no stage can be located in it even though the kernels of every stage are there, and a log-prob
+  forward looks just like the forward half of the update.
+* **`compute_log_prob` can legitimately be skipped.** With
+  `algorithm.rollout_correction.bypass_mode=True` the trainer reuses the rollout's log probs
+  instead of recomputing them, so the actor forward never runs. With LoRA
+  (`ref_in_actor`) the reference forward is served by `compute_log_prob` on the actor worker, so
+  it appears under that name instead of `compute_ref_log_prob`.
 
 ## Traces with no GPU kernels
 

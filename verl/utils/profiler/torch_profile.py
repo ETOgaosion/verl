@@ -75,7 +75,7 @@ def build_trace_basename(
     """Build a descriptive, per-process trace filename stem.
 
     Encodes -- when available -- the worker role (``save_file_prefix``, e.g. ``actor``),
-    the profiling scope role (``role``, e.g. ``e2e``), the training step
+    the profiling scope role (``role``, e.g. ``train``), the RL step
     (``profile_step``), the global rank and world size, and the
     tensor/pipeline/data/context parallel ranks, followed by pid and a timestamp so that
     files written by different processes never collide.
@@ -121,20 +121,22 @@ def get_torch_profiler(
     """Build a ``torch.profiler.profile`` instance.
 
     Args:
-        contents: Selects the other ``torch.profiler.profile`` arguments -- ``cpu``/``cuda``
-            map to ``activities``, ``shapes`` to ``record_shapes``, ``memory`` to
-            ``profile_memory`` and ``stack`` to ``with_stack``.
+        contents: Selects the other ``torch.profiler.profile`` arguments -- ``cuda`` maps to
+            ``activities``, ``shapes`` to ``record_shapes``, ``memory`` to ``profile_memory`` and
+            ``stack`` to ``with_stack``. CPU activity is always on, since verl's per-stage
+            ``record_function`` markers are CPU-side events.
         save_path: Directory to write chrome traces to.
-        role: Optional logical scope name (e.g. ``e2e``, or a stage name in discrete mode),
-            embedded in the filename.
+        role: Optional logical scope name (e.g. ``train`` for a worker's whole-step window, or
+            a stage name in discrete mode), embedded in the filename.
         save_file_prefix: Optional filename prefix, typically the worker role (``actor``/
             ``critic``/``ref``) so per-process traces are distinguishable.
         rank: Global rank, embedded in the trace filename (a fallback when
             ``torch.distributed`` is not initialized).
         schedule: Optional kwargs for ``torch.profiler.schedule``
-            (``wait``/``warmup``/``active``/``repeat``/``skip_first``). When provided, the
-            caller must drive ``prof.step()`` once per step to advance the schedule.
-        profile_step: Optional training step being profiled, embedded in the filename.
+            (``wait``/``warmup``/``active``/``repeat``/``skip_first``), counted in mini-batches.
+            When provided, the caller must drive ``prof.step()`` once per mini-batch to advance
+            the schedule.
+        profile_step: Optional RL step being profiled, embedded in the filename.
     """
     # All traces land directly in save_path: the role is already part of the filename, so an
     # extra directory level would only scatter one step's traces across sibling dirs and hide
@@ -145,30 +147,36 @@ def get_torch_profiler(
         rank=rank, role=role, save_file_prefix=save_file_prefix, profile_step=profile_step
     )
 
-    # A scheduled profiler can fire on_trace_ready multiple times (one per active
-    # cycle), so keep an invocation counter to avoid overwriting earlier cycles.
+    # A scheduled profiler fires on_trace_ready once per collection window, so each file
+    # needs a suffix of its own; keep an invocation counter as a last-resort uniquifier.
     handler_state = {"count": 0}
 
     def _trace_handler(prof):
         idx = handler_state["count"]
         handler_state["count"] += 1
+        suffix = ""
         if schedule:
-            # Every scheduled file covers only part of the update loop, so tag it with its
-            # cycle index and with the mini-batch (profiler step) the cycle ended on.
-            suffix = f"_cycle{idx}"
-            mini_batch = getattr(prof, "step_num", None)
-            if isinstance(mini_batch, int):
-                suffix += f"_mb{mini_batch}"
-        else:
-            suffix = "" if idx == 0 else f"_cycle{idx}"
+            # A scheduled file holds one collection window, so name the mini-batches it
+            # actually contains: verl advances the schedule once per mini-batch of the update
+            # loop, and torch flushes on the mini-batch *after* the window, hence the offset.
+            step_num = getattr(prof, "step_num", None)
+            if isinstance(step_num, int):
+                last_mb = step_num - 1
+                first_mb = max(last_mb - int(schedule.get("active", 1) or 1) + 1, 0)
+                suffix = f"_mb{first_mb}" if first_mb == last_mb else f"_mb{first_mb}-{last_mb}"
+            else:
+                suffix = f"_part{idx}"
+        elif idx:
+            suffix = f"_part{idx}"
         out_path = os.path.join(save_path, f"{base_file_name}{suffix}.json.gz")
         print(f"[Profiler] Saving trace to {out_path}")
         prof.export_chrome_trace(out_path)
 
     contents = set(contents) if contents else set()
-    activities = []
-    if not contents or "cpu" in contents:
-        activities.append(torch.profiler.ProfilerActivity.CPU)
+    # CPU activity is always collected, whatever `contents` selects: verl marks each stage with
+    # record_function, and those markers -- like operator names -- are CPU-side events, so a
+    # device-only trace would be bare kernels that cannot be attributed to any stage.
+    activities = [torch.profiler.ProfilerActivity.CPU]
     if not contents or "cuda" in contents:
         activities.append(torch.profiler.ProfilerActivity.CUDA)
 
@@ -234,7 +242,7 @@ class Profiler(DistProfiler):
         self.discrete = getattr(self.tool_config, "discrete", False)
         # Resolved torch.profiler.schedule kwargs for the active run (None => continuous).
         self._schedule_kwargs = None
-        # Training step of the profiled window, reported by the trainer on start().
+        # RL step of the profiled window, reported by the trainer on start().
         self._profile_step = None
 
     def check(self):
@@ -259,7 +267,7 @@ class Profiler(DistProfiler):
     def start(self, **kwargs):
         role = kwargs.get("role", None)
         # Recorded outside the discrete gate: discrete mode opens its profilers later, from
-        # annotate(), and still needs to know which training step it is collecting.
+        # annotate(), and still needs to know which RL step it is collecting.
         self._profile_step = kwargs.get("profile_step", kwargs.get("global_step"))
         if not self.discrete and Profiler._define_count == 0:
             self._schedule_kwargs = self._resolve_schedule_kwargs()
@@ -313,7 +321,11 @@ class Profiler(DistProfiler):
         def decorator(func):
             @functools.wraps(func)
             def wrapper(*args, **kwargs_inner):
-                profile_name = message or func.__name__
+                # Prefer the stage label (`role`, e.g. "actor_compute_log_prob"), which names both
+                # the role and the function it ran: in a colocated worker the method name alone
+                # cannot say whether a log-prob forward belongs to the actor or the reference
+                # model. Fall back to the method name for stages that declare no role.
+                profile_name = message or role or func.__name__
 
                 if not self.discrete:
                     # In continuous mode, we just record function, profiler started globally

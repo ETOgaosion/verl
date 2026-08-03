@@ -39,21 +39,26 @@ class NsightToolConfig(BaseConfig):
 class TorchProfilerScheduleConfig(BaseConfig):
     """Schedule for ``torch.profiler.schedule``.
 
-    Field names mirror the official ``torch.profiler.schedule`` API. The profiler
-    cycles through ``skip_first`` -> (``wait`` -> ``warmup`` -> ``active``) x ``repeat``.
-    Scheduling is only enabled when ``active > 0``; otherwise the profiler runs in
-    continuous mode (collect everything between start and stop).
+    Field names mirror the official ``torch.profiler.schedule`` API. The profiler runs
+    ``skip_first``, then repeats ``wait`` -> ``warmup`` -> ``active`` ``repeat`` times,
+    writing one trace file per ``active`` group. Scheduling is only enabled when
+    ``active > 0``; otherwise the profiler runs in continuous mode (collect everything
+    between start and stop).
+
+    Every field counts *mini-batches*, not RL steps: the unit is one ``DistProfiler.step()``
+    call, which verl issues once per mini-batch of the actor update loop (which RL steps get
+    profiled at all is decided by ``global_profiler.steps``).
     """
 
-    # Number of steps to skip at the very beginning (not counted in the cycle).
+    # Number of mini-batches to skip at the very beginning (before the first wait).
     skip_first: int = 0
-    # Number of steps to idle (no collection) at the start of each cycle.
+    # Number of mini-batches to idle (no collection) before each recording.
     wait: int = 0
-    # Number of steps to warm up (tracing on, data discarded) each cycle.
+    # Number of mini-batches to warm up (tracing on, data discarded) before each recording.
     warmup: int = 0
-    # Number of steps to actively record each cycle. <= 0 disables scheduling.
+    # Number of mini-batches to record, i.e. how many each trace file holds. <= 0 disables scheduling.
     active: int = 0
-    # Number of cycles to repeat. 0 means repeat until profiling stops.
+    # How many times to repeat wait -> warmup -> active. 0 means repeat until profiling stops.
     repeat: int = 0
     name: str = "torch_schedule"
 
@@ -84,7 +89,9 @@ class TorchProfilerScheduleConfig(BaseConfig):
 class TorchProfilerToolConfig(BaseConfig):
     """Torch profiler tool config."""
 
-    # options: cuda, cpu, memory, shapes, stack
+    # options: cuda, cpu, memory, shapes, stack. Empty means collect everything.
+    # CPU activity is collected either way (the per-stage record_function markers are CPU-side
+    # events), so listing "cpu" here is redundant; the other options are honored as written.
     contents: list[str] = field(default_factory=list)
     discrete: bool = False
     # Start collecting profiler data from this response-token index.
@@ -171,6 +178,8 @@ class NPUToolConfig(NsightToolConfig):
     """NPU profiler too; config."""
 
     # options: npu, cpu, memory, shapes, module, stack
+    # CPU activity is collected either way (the per-stage mstx markers are CPU-side events),
+    # so listing "cpu" here is redundant; the other options are honored as written.
     contents: list[str] = field(default_factory=list)
 
     # Collection level, optional values: level_none, level0, level1, level2.

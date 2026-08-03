@@ -62,8 +62,8 @@ class TestTorchProfile(unittest.TestCase):
         # The role must not create a directory level: one step's traces would be scattered
         # across sibling dirs and hidden from finish_hook_cmd, which only sees save_path.
         with tempfile.TemporaryDirectory() as save_path:
-            get_torch_profiler(contents=["cpu"], save_path=save_path, role="e2e", save_file_prefix="actor", rank=0)
-            # No "e2e" sub-directory is created next to the traces.
+            get_torch_profiler(contents=["cpu"], save_path=save_path, role="train", save_file_prefix="actor", rank=0)
+            # No "train" sub-directory is created next to the traces.
             self.assertEqual(os.listdir(save_path), [])
 
             _, kwargs = mock_profile.call_args
@@ -72,7 +72,7 @@ class TestTorchProfile(unittest.TestCase):
 
             (out_path,), _ = mock_prof.export_chrome_trace.call_args
             self.assertEqual(os.path.dirname(out_path), save_path)
-            self.assertTrue(os.path.basename(out_path).startswith("actor_e2e_"))
+            self.assertTrue(os.path.basename(out_path).startswith("actor_train_"))
             self.assertTrue(out_path.endswith(".json.gz"))
 
     @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
@@ -108,11 +108,35 @@ class TestTorchProfile(unittest.TestCase):
         config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
         profiler = Profiler(rank=0, config=config, tool_config=tool_config)
 
-        profiler.start(role="e2e", profile_step=3)
+        profiler.start(role="train", profile_step=3)
         _, kwargs = mock_get_profiler.call_args
         self.assertEqual(kwargs["profile_step"], 3)
-        self.assertEqual(kwargs["role"], "e2e")
+        self.assertEqual(kwargs["role"], "train")
         profiler.stop()
+
+    @patch("torch.profiler.record_function")
+    def test_continuous_annotate_range_names_role_and_function(self, mock_record_function):
+        # Continuous mode puts every stage in one trace, so the range name has to carry the role as
+        # well as the function: a bare "compute_log_prob" cannot say whether the forward belonged to
+        # the actor or to the reference model colocated in the same process.
+        tool_config = TorchProfilerToolConfig(contents=["cpu"], discrete=False)
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+
+        @profiler.annotate(role="ref_compute_log_prob")
+        def compute_log_prob():
+            return "done"
+
+        @profiler.annotate()
+        def train_batch():
+            return "done"
+
+        self.assertEqual(compute_log_prob(), "done")
+        mock_record_function.assert_called_with("ref_compute_log_prob")
+
+        # A stage that declares no role is still named after the function it wraps.
+        self.assertEqual(train_batch(), "done")
+        mock_record_function.assert_called_with("train_batch")
 
     @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
     def test_discrete_annotate_names_stage_and_step(self, mock_get_profiler):
@@ -122,7 +146,7 @@ class TestTorchProfile(unittest.TestCase):
         tool_config = TorchProfilerToolConfig(contents=["cpu"], discrete=True)
         config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
         profiler = Profiler(rank=0, config=config, tool_config=tool_config)
-        profiler.start(role="e2e", profile_step=5)
+        profiler.start(role="train", profile_step=5)
 
         @profiler.annotate(role="actor_update")
         def update_actor():
@@ -144,33 +168,53 @@ class TestTorchProfile(unittest.TestCase):
 
     @patch("torch.profiler.schedule")
     @patch("torch.profiler.profile")
-    def test_scheduled_trace_files_identify_cycle_and_mini_batch(self, mock_profile, mock_schedule):
-        # A scheduled run flushes once per cycle, each covering different mini-batches. Every
-        # file must say which cycle it is and which mini-batch the cycle ended on.
+    def test_scheduled_trace_files_name_the_mini_batches_they_contain(self, mock_profile, mock_schedule):
+        # A scheduled run flushes once per collection window, each covering different
+        # mini-batches. torch fires on_trace_ready on the mini-batch *after* the window, so the
+        # name must report the window itself: step_num=6 with active=3 holds mini-batches 3-5.
         with tempfile.TemporaryDirectory() as save_path:
             get_torch_profiler(
                 contents=["cpu"],
                 save_path=save_path,
-                role="e2e",
+                role="train",
                 save_file_prefix="actor",
                 rank=0,
                 profile_step=2,
-                schedule={"skip_first": 0, "wait": 1, "warmup": 1, "active": 2, "repeat": 2},
+                schedule={"skip_first": 1, "wait": 1, "warmup": 1, "active": 3, "repeat": 2},
             )
             _, kwargs = mock_profile.call_args
             on_trace_ready = kwargs["on_trace_ready"]
 
             names = []
-            for step_num in (4, 8):
+            for step_num in (6, 11):
                 mock_prof = MagicMock()
                 mock_prof.step_num = step_num
                 on_trace_ready(mock_prof)
                 (out_path,), _ = mock_prof.export_chrome_trace.call_args
                 names.append(os.path.basename(out_path))
 
-            self.assertTrue(names[0].startswith("actor_e2e_step2_rank0_"))
-            self.assertTrue(names[0].endswith("_cycle0_mb4.json.gz"))
-            self.assertTrue(names[1].endswith("_cycle1_mb8.json.gz"))
+            self.assertTrue(names[0].startswith("actor_train_step2_rank0_"))
+            self.assertTrue(names[0].endswith("_mb3-5.json.gz"))
+            self.assertTrue(names[1].endswith("_mb8-10.json.gz"))
+
+    @patch("torch.profiler.schedule")
+    @patch("torch.profiler.profile")
+    def test_single_mini_batch_window_names_one_mini_batch(self, mock_profile, mock_schedule):
+        # A one-mini-batch window covers a single mini-batch, so the range collapses.
+        with tempfile.TemporaryDirectory() as save_path:
+            get_torch_profiler(
+                contents=["cpu"],
+                save_path=save_path,
+                rank=0,
+                schedule={"skip_first": 0, "wait": 0, "warmup": 0, "active": 1, "repeat": 0},
+            )
+            _, kwargs = mock_profile.call_args
+            mock_prof = MagicMock()
+            mock_prof.step_num = 3
+            kwargs["on_trace_ready"](mock_prof)
+
+            (out_path,), _ = mock_prof.export_chrome_trace.call_args
+            self.assertTrue(out_path.endswith("_mb2.json.gz"))
 
     @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
     def test_discrete_mode(self, mock_get_profiler):
@@ -344,11 +388,11 @@ class TestTorchProfile(unittest.TestCase):
         # tp/pp/dp/cp parallel ranks so per-process traces are self-describing.
         name = build_trace_basename(
             rank=5,
-            role="e2e",
+            role="train",
             save_file_prefix="actor",
             topology={"rank": 5, "world_size": 16, "tp": 1, "pp": 0, "dp": 2, "cp": 0},
         )
-        self.assertTrue(name.startswith("actor_e2e_"))
+        self.assertTrue(name.startswith("actor_train_"))
         self.assertIn("rank5-of-16", name)
         self.assertIn("tp1-pp0-dp2-cp0", name)
         self.assertIn(f"pid{os.getpid()}", name)
@@ -357,13 +401,13 @@ class TestTorchProfile(unittest.TestCase):
         # Without the step, traces from different profiled steps are only distinguishable by
         # their wall-clock timestamp, which is unreadable when several steps are profiled.
         name = build_trace_basename(
-            rank=0, role="e2e", save_file_prefix="actor", profile_step=7, topology={"rank": 0, "world_size": 8}
+            rank=0, role="train", save_file_prefix="actor", profile_step=7, topology={"rank": 0, "world_size": 8}
         )
-        self.assertTrue(name.startswith("actor_e2e_step7_rank0-of-8_"))
+        self.assertTrue(name.startswith("actor_train_step7_rank0-of-8_"))
 
     def test_build_trace_basename_omits_step_when_unknown(self):
-        name = build_trace_basename(rank=0, role="e2e", save_file_prefix="actor", topology={})
-        self.assertTrue(name.startswith("actor_e2e_rank0_"))
+        name = build_trace_basename(rank=0, role="train", save_file_prefix="actor", topology={})
+        self.assertTrue(name.startswith("actor_train_rank0_"))
         self.assertNotIn("step", name)
 
     def test_build_trace_basename_distinguishes_roles_same_rank(self):
@@ -442,6 +486,33 @@ class TestTorchProfile(unittest.TestCase):
         mock_prof_instance.step.assert_called_once()
 
         dist_profiler.stop()
+
+
+class TestCpuActivityAlwaysCollected(unittest.TestCase):
+    """Stage markers are CPU-side events, so a device-only trace hides every verl stage.
+
+    ``contents`` is left exactly as the user wrote it; CPU activity is enabled when the profiler is
+    built, so no configuration can produce a trace of unattributable kernels.
+    """
+
+    @patch("torch.profiler.profile")
+    def test_cpu_activity_added_for_device_only_contents(self, mock_profile):
+        for contents in (["cuda"], ["cuda", "memory"], []):
+            with self.subTest(contents=contents):
+                mock_profile.reset_mock()
+                get_torch_profiler(contents=list(contents), save_path="/tmp/test", rank=0)
+                activities = mock_profile.call_args[1]["activities"]
+                self.assertIn(torch.profiler.ProfilerActivity.CPU, activities)
+                self.assertIn(torch.profiler.ProfilerActivity.CUDA, activities)
+
+    @patch("torch.profiler.profile")
+    def test_contents_are_not_rewritten(self, mock_profile):
+        # The user's selection is theirs: enabling the activity must not edit the config.
+        contents = ["cuda"]
+        tool_config = TorchProfilerToolConfig(contents=contents)
+        get_torch_profiler(contents=tool_config.contents, save_path="/tmp/test", rank=0)
+        self.assertEqual(tool_config.contents, ["cuda"])
+        self.assertEqual(contents, ["cuda"])
 
 
 def _role_profiler_omegaconf(tool="torch", enable=True, discrete=False, contents=("cpu", "cuda")):

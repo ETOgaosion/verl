@@ -100,7 +100,8 @@ def get_npu_profiler(
     Args:
         contents (list[str]):
             A list of options to control the collection content,
-            such as npu, cpu, memory, shapes, module, stack.
+            such as npu, memory, shapes, module, stack. CPU activity is always collected,
+            since the per-stage mstx markers are CPU-side events.
         profile_level (str):
             The collection level, which can be set to level_none,
             level0, level1 and level2.
@@ -141,11 +142,12 @@ def get_npu_profiler(
         mstx_domain_exclude=["communication"],
     )
 
-    activites = []
+    # CPU activity is always collected, whatever `contents` selects: verl marks each stage with an
+    # mstx range, and those markers -- like operator names -- are CPU-side events, so a device-only
+    # trace would be bare kernels that cannot be attributed to any stage.
+    activites = [torch_npu.profiler.ProfilerActivity.CPU]
     if contents is None or "npu" in contents:
         activites.append(torch_npu.profiler.ProfilerActivity.NPU)
-    if contents is None or "cpu" in contents:
-        activites.append(torch_npu.profiler.ProfilerActivity.CPU)
 
     prof = torch_npu.profiler.profile(
         with_modules=contents is None or "module" in contents,
@@ -233,7 +235,10 @@ class NPUProfiler(DistProfiler):
         def decorator(func):
             @functools.wraps(func)
             def wrapper(*args, **kwargs_inner):
-                profile_name = message or func.__name__
+                # Prefer the stage label (`role`, e.g. "actor_compute_log_prob"): it names both the
+                # role and the function, which the method name alone cannot do for a colocated
+                # worker. Fall back to the method name for stages that declare no role.
+                profile_name = message or role or func.__name__
                 discrete_mode = self.discrete
 
                 if not discrete_mode:
