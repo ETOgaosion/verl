@@ -39,7 +39,7 @@ You can customize the PyTorch Profiler behavior using the following fields under
     *   **`stack`**: Record source code file and line number.
 * **`profile_token_start`**: Effective only for the rollout role; defines the start response-token index for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
 * **`profile_token_end`**: Effective only for the rollout role; defines the stop response-token index (exclusive) for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
-* **`schedule`**: (Advanced) Enables [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) so that only part of the Actor update loop is recorded. It only takes effect when `active > 0`; otherwise the profiler collects continuously (the default). verl advances the schedule by calling `profiler.step()` once per mini-batch, so **every field below counts mini-batches**, not RL steps. The fields mirror the official PyTorch API, whose `steps` are these mini-batches:
+* **`schedule`**: (Advanced) Enables [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) so that only part of the training step is recorded. It only takes effect when `active > 0`; otherwise the profiler collects continuously (the default). verl advances the schedule by calling `profiler.step()` once per mini-batch handed to the engine -- once per mini-batch of the update loop, and once for each forward-only stage (`compute_log_prob`, `compute_ref_log_prob`, critic values), which consumes its whole batch in one call. **Every field below therefore counts mini-batches**, not RL steps. The fields mirror the official PyTorch API, whose `steps` are these mini-batches:
     *   **`skip_first`**: Number of initial mini-batches to ignore before the first `wait` begins.
     *   **`wait`**: Mini-batches to idle (no collection) before each recording.
     *   **`warmup`**: Mini-batches to trace but discard, letting the profiler stabilize, before each recording.
@@ -134,7 +134,15 @@ When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance d
 
 ### 3. Scheduled Collection (`wait`/`warmup`/`active`/`repeat`)
 
-For long update loops with many mini-batches (e.g. large gradient accumulation), you usually don't need to trace every mini-batch. A `schedule` records only a few mini-batches at a time, keeping traces small while still capturing steady-state behavior. verl calls `profiler.step()` once per mini-batch so the schedule advances automatically.
+By default (`active: 0`) collection is continuous: one file per rank holds the whole profiled step
+as that worker ran it. For long update loops with many mini-batches (e.g. large gradient
+accumulation) that file gets unwieldy, and a `schedule` bounds it by recording only a few
+mini-batches at a time while still capturing steady-state behavior.
+
+verl advances the schedule by calling `profiler.step()` once per mini-batch handed to the engine,
+wherever mini-batches occur -- the update loop ticks once per mini-batch, and a forward-only stage
+(`compute_log_prob`, `compute_ref_log_prob`, critic values) consumes its whole batch in one call and
+so counts as a single mini-batch.
 
 ```yaml
 actor_rollout_ref:
@@ -157,10 +165,27 @@ actor_rollout_ref:
 
 With the configuration above, within each profiled RL step verl skips mini-batch 0, then runs
 `wait(1) -> warmup(1) -> active(3)` twice, producing two trace files: one holding mini-batches
-3-5 (suffix `_mb3-5`) and one holding mini-batches 8-10 (suffix `_mb8-10`). If the update loop has
-fewer mini-batches than the schedule needs, only the mini-batches that were reached are recorded.
+3-5 (suffix `_mb3-5`) and one holding mini-batches 8-10 (suffix `_mb8-10`). If the step has fewer
+mini-batches than the schedule needs, only the mini-batches that were reached are recorded, and the
+suffix names just those (a `warmup: 1, active: 2` schedule on a two-mini-batch step yields `_mb1`,
+not `_mb1-2`).
 
-`schedule` only applies to the training update loop. It is a no-op for the rollout engine side, which uses `profile_token_start`/`profile_token_end` instead. SFT has no mini-batch loop and advances the schedule once per training step, so there each unit is one `train_batch` call.
+**A leading phase discards the start of the step.** `skip_first`, `wait` and `warmup` drop
+mini-batches at the front of the window, and since the mini-batch count runs across the whole step,
+those are the log-prob forwards before the update loop. Recording begins at `start_profile` only
+when all three are `0`; otherwise the trace holds a slice from the middle of the step. Sizing
+matters as well: `skip_first + repeat * (wait + warmup + active)` has to fit in the step's
+mini-batch count, which is one per forward-only stage that runs plus
+`data.train_batch_size / actor.ppo_mini_batch_size` update mini-batches.
+
+So if you want the whole step -- the log-prob forwards and the entire update loop -- in a single
+file, leave `active` at `0`. If you want the whole step but a bounded number of update mini-batches,
+keep `skip_first`/`wait`/`warmup` at `0` and set `active` to how far into the step to record. To get
+one file per stage instead, set `discrete: True`, which ignores the schedule entirely.
+
+`schedule` applies to the training side only. It is a no-op for the rollout engine side, which uses
+`profile_token_start`/`profile_token_end` instead. SFT has no mini-batch loop and advances the
+schedule once per training step, so there each unit is one `train_batch` call.
 
 ## Output file naming
 
@@ -181,10 +206,11 @@ attributed to a specific process without opening it. The stem is:
 * **`rank`/`world`**: the global `torch.distributed` rank and world size.
 * **`tp/pp/dp/cp`**: tensor/pipeline/data/context parallel ranks, included when Megatron's
   parallel state is initialized (plain FSDP data parallelism only reports `rank`).
-* **`mb<A>[-<B>]`**: for scheduled runs only, the mini-batches of the update loop this file
-  actually contains, counted from the start of the profiled RL step. `_mb3-5` means the trace
-  holds mini-batches 3, 4 and 5 of RL step `<S>`. An unscheduled run collects the whole RL step
-  into one file and adds no suffix.
+* **`mb<A>[-<B>]`**: for scheduled runs only, the mini-batches this file actually contains,
+  counted from the start of the profiled RL step over every stage that consumes mini-batches
+  (the log-prob forwards count as one each, then the update loop). `_mb3-5` means the trace holds
+  mini-batches 3, 4 and 5 of RL step `<S>`. An unscheduled run collects the whole RL step into one
+  file and adds no suffix.
 
 ### What one RL step looks like on disk
 
@@ -241,6 +267,11 @@ Seeing a single `actor...` file per rank, with no separate reference/critic file
   and turning the actor's profiler off also drops the reference stages that share the process.
 * **The role may not exist.** There is no critic unless the algorithm uses a value model (GRPO
   and friends do not), and no reference model unless a KL term needs one.
+* **A `schedule` is configured.** Scheduling bounds collection to a window of mini-batches, and a
+  non-zero `skip_first`/`wait`/`warmup` puts that window past the log-prob forwards, leaving a trace
+  of update forward/backward passes and nothing else -- see
+  [Scheduled Collection](#3-scheduled-collection-waitwarmupactiverepeat). The worker log names the
+  schedule at `start_profile` time: `[Profiler] started for rank 0: scheduled collection {...}`.
 * **Traces collected before CPU activity became unconditional.** A device-only run
   (`contents: [cuda]` on an older verl) has no `record_function` ranges and no operator names, so
   no stage can be located in it even though the kernels of every stage are there, and a log-prob

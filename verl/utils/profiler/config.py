@@ -46,8 +46,14 @@ class TorchProfilerScheduleConfig(BaseConfig):
     between start and stop).
 
     Every field counts *mini-batches*, not RL steps: the unit is one ``DistProfiler.step()``
-    call, which verl issues once per mini-batch of the actor update loop (which RL steps get
-    profiled at all is decided by ``global_profiler.steps``).
+    call, which verl issues once per mini-batch handed to the engine -- once per mini-batch of
+    the update loop, and once for each forward-only stage (log-prob, critic values), which
+    consumes its whole batch in a single call. Which RL steps get profiled at all is decided by
+    ``global_profiler.steps``.
+
+    Because that count spans the whole step, a non-zero ``skip_first``/``wait``/``warmup`` starts
+    the recording somewhere after the log-prob forwards. Keep them at 0 (or leave ``active`` at 0
+    for continuous collection) to have the trace start at the beginning of the step.
     """
 
     # Number of mini-batches to skip at the very beginning (before the first wait).

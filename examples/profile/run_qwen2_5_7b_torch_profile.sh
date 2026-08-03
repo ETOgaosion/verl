@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
-# GRPO profiling (torch profiler, scheduled) | text | vLLM rollout | FSDP training | NVIDIA GPUs
+# GRPO profiling (torch profiler) | text | vLLM rollout | FSDP training | NVIDIA GPUs
 #
-# Captures PyTorch profiler chrome traces of BOTH the actor update loop (training)
-# and the vLLM rollout engine (inference). Traces (.json.gz) are written under
+# Captures PyTorch profiler chrome traces of BOTH the training side and the vLLM
+# rollout engine (inference). Traces (.json.gz) are written under
 # global_profiler.save_path and can be opened in chrome://tracing or Perfetto:
-#   <save_path>/                              -> actor (training) traces
+#   <save_path>/                              -> training traces
 #   <save_path>/agent_loop_rollout_replica_* -> rollout (inference) traces
 #
-# Training (actor) demonstrates torch.profiler.schedule: instead of tracing every
-# mini-batch, the profiler advances one step per mini-batch (via profiler.step())
-# and only records a wait/warmup/active window, repeated `repeat` times. Set
-# PROFILE_SCHEDULE_ACTIVE=0 to disable scheduling and trace the whole window
-# continuously instead.
+# Training is collected continuously (discrete=False), so one file per profiled step
+# per rank holds the whole step as that worker ran it: compute_log_prob (old log
+# probs), compute_ref_log_prob and update_actor, each a record_function row named
+# after its stage.
 #
 # Inference (rollout) is profiled by vLLM's own engine-side torch profiler, which
 # ONLY runs in "discrete" mode and has no notion of torch.profiler.schedule/step().
 # It is therefore forced to discrete=True for the rollout (independent of the
-# actor's schedule) and captures the full generate_sequences window on each profiled
-# step. Set PROFILE_ROLLOUT=False to profile training only.
+# actor's discrete setting) and captures the full generate_sequences window on each
+# profiled step. Set PROFILE_ROLLOUT=False to profile training only.
+#
+# For a very long update loop, PROFILE_SCHEDULE_ACTIVE=<n> bounds the trace to the
+# first n mini-batches (see the schedule notes below); it is off by default because a
+# schedule cannot capture the whole step.
 
 set -xeuo pipefail
 
@@ -34,13 +37,19 @@ profile_ranks_all=${PROFILE_RANKS_ALL:-False}
 profile_discrete=${PROFILE_DISCRETE:-False}
 profile_contents=${PROFILE_CONTENTS:-"['cpu','cuda']"}
 
-# torch.profiler.schedule (advances once per mini-batch of the actor update loop).
-# Each cycle records `warmup` (discarded) + `active` (kept) mini-batches, repeated
-# `repeat` times, after skipping `skip_first`. active<=0 disables scheduling.
+# torch.profiler.schedule, disabled by default (active=0) so the trace covers the
+# whole training step. The schedule's clock is one tick per mini-batch of the actor
+# update loop, which has two consequences worth knowing before enabling it:
+#   - Recording ends after `active` mini-batches, which is the point: it keeps traces
+#     small when the update loop has many mini-batches.
+#   - `skip_first`/`wait`/`warmup` discard mini-batches at the front of the window,
+#     and because the earlier stages of the step (rollout sampling, the log-prob
+#     forwards) run before the first tick, anything non-zero there drops them from
+#     the trace as well. Leave them at 0 unless you only care about the update loop.
 profile_schedule_skip_first=${PROFILE_SCHEDULE_SKIP_FIRST:-0}
 profile_schedule_wait=${PROFILE_SCHEDULE_WAIT:-0}
-profile_schedule_warmup=${PROFILE_SCHEDULE_WARMUP:-1}
-profile_schedule_active=${PROFILE_SCHEDULE_ACTIVE:-2}
+profile_schedule_warmup=${PROFILE_SCHEDULE_WARMUP:-0}
+profile_schedule_active=${PROFILE_SCHEDULE_ACTIVE:-0}
 profile_schedule_repeat=${PROFILE_SCHEDULE_REPEAT:-1}
 
 # Inference (rollout) profiling. The vLLM engine profiler runs in discrete mode only,
@@ -103,7 +112,7 @@ ACTOR=(
     actor_rollout_ref.actor.entropy_coeff=${entropy_coeff}
     actor_rollout_ref.actor.fsdp_config.param_offload=False
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False
-    # Enable the torch profiler on the actor update loop with a schedule.
+    # Enable the torch profiler on the training side (whole step unless a schedule is set).
     actor_rollout_ref.actor.profiler.enable=True
     actor_rollout_ref.actor.profiler.ranks=${profile_ranks}
     actor_rollout_ref.actor.profiler.all_ranks=${profile_ranks_all}

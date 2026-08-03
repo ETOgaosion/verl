@@ -199,6 +199,48 @@ class TestTorchProfile(unittest.TestCase):
 
     @patch("torch.profiler.schedule")
     @patch("torch.profiler.profile")
+    def test_window_cut_short_names_only_the_recorded_mini_batches(self, mock_profile, mock_schedule):
+        # A step with fewer mini-batches than wait+warmup+active ends mid-window, and
+        # stop() flushes at that point. With warmup=1, active=2 and only two mini-batches, the
+        # first is warmup (discarded) and the file holds mini-batch 1 alone: naming it "mb0-1"
+        # would credit it with a mini-batch that was never recorded.
+        with tempfile.TemporaryDirectory() as save_path:
+            get_torch_profiler(
+                contents=["cpu"],
+                save_path=save_path,
+                rank=0,
+                schedule={"skip_first": 0, "wait": 0, "warmup": 1, "active": 2, "repeat": 1},
+            )
+            _, kwargs = mock_profile.call_args
+            mock_prof = MagicMock()
+            mock_prof.step_num = 2
+            kwargs["on_trace_ready"](mock_prof)
+
+            (out_path,), _ = mock_prof.export_chrome_trace.call_args
+            self.assertTrue(out_path.endswith("_mb1.json.gz"), out_path)
+
+    def test_stop_flushes_a_window_the_step_ended_mid_way(self):
+        # torch discards a window that is still in RECORD when the profiler stops, so a step with
+        # too few mini-batches would leave no trace file at all unless the action is promoted.
+        schedule_cfg = TorchProfilerScheduleConfig(skip_first=0, wait=0, warmup=1, active=3, repeat=1)
+        tool_config = TorchProfilerToolConfig(contents=["cpu"], discrete=False, schedule=schedule_cfg)
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+
+        with patch("verl.utils.profiler.torch_profile.get_torch_profiler") as mock_get_profiler:
+            mock_prof = MagicMock()
+            mock_prof.current_action = torch.profiler.ProfilerAction.RECORD
+            mock_get_profiler.return_value = mock_prof
+            profiler.start(role="train", profile_step=1)
+            profiler.stop()
+
+        self.assertEqual(mock_prof.current_action, torch.profiler.ProfilerAction.RECORD_AND_SAVE)
+        mock_prof.stop.assert_called_once()
+        # The schedule is advanced per mini-batch, so stop() must not inject an extra step.
+        mock_prof.step.assert_not_called()
+
+    @patch("torch.profiler.schedule")
+    @patch("torch.profiler.profile")
     def test_single_mini_batch_window_names_one_mini_batch(self, mock_profile, mock_schedule):
         # A one-mini-batch window covers a single mini-batch, so the range collapses.
         with tempfile.TemporaryDirectory() as save_path:

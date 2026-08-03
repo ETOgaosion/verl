@@ -421,6 +421,12 @@ class TrainingWorker(Worker, DistProfilerExtension):
                 output = self.engine.infer_batch(data, loss_function=loss_function)
         delta_time = timer.last
 
+        # Advance the profiler schedule, which counts mini-batches wherever they occur, not
+        # just in the update loop: a forward-only stage (log-prob, values) consumes its whole
+        # batch in one call, so it is a single mini-batch. No-op unless a torch profiler
+        # schedule (wait/warmup/active/repeat) is active.
+        self.profiler.step()
+
         if self.engine.is_mp_src_rank_with_outputs():
             final_output = self._postprocess_output(
                 output,

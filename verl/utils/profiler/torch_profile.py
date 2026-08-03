@@ -151,18 +151,37 @@ def get_torch_profiler(
     # needs a suffix of its own; keep an invocation counter as a last-resort uniquifier.
     handler_state = {"count": 0}
 
+    def _scheduled_mini_batch_range(step_num: int) -> tuple[int, int]:
+        """Mini-batches held by the window being flushed at ``step_num``.
+
+        verl advances the schedule once per mini-batch, so the last mini-batch in the window is the
+        one that just ran, ``step_num - 1``. The window's first mini-batch is derived from the
+        schedule rather than from ``active``, because a window can hold fewer mini-batches than
+        ``active``: when the step runs out of mini-batches mid-window, ``stop()`` flushes whatever
+        was collected.
+        """
+        skip_first = int(schedule.get("skip_first", 0) or 0)
+        wait = int(schedule.get("wait", 0) or 0)
+        warmup = int(schedule.get("warmup", 0) or 0)
+        active = max(int(schedule.get("active", 1) or 1), 1)
+
+        last_mb = max(step_num - 1, 0)
+        cycle_len = wait + warmup + active
+        cycle = max(last_mb - skip_first, 0) // cycle_len
+        # Recording starts after this cycle's skipped, idle and warmup mini-batches.
+        first_mb = skip_first + cycle * cycle_len + wait + warmup
+        return min(first_mb, last_mb), last_mb
+
     def _trace_handler(prof):
         idx = handler_state["count"]
         handler_state["count"] += 1
         suffix = ""
         if schedule:
             # A scheduled file holds one collection window, so name the mini-batches it
-            # actually contains: verl advances the schedule once per mini-batch of the update
-            # loop, and torch flushes on the mini-batch *after* the window, hence the offset.
+            # actually contains.
             step_num = getattr(prof, "step_num", None)
             if isinstance(step_num, int):
-                last_mb = step_num - 1
-                first_mb = max(last_mb - int(schedule.get("active", 1) or 1) + 1, 0)
+                first_mb, last_mb = _scheduled_mini_batch_range(step_num)
                 suffix = f"_mb{first_mb}" if first_mb == last_mb else f"_mb{first_mb}-{last_mb}"
             else:
                 suffix = f"_part{idx}"
@@ -280,7 +299,16 @@ class Profiler(DistProfiler):
                 schedule=self._schedule_kwargs,
                 profile_step=self._profile_step,
             )
-            print(f"[Profiler] started for rank {self.rank}")
+            if self._schedule_kwargs:
+                # Worth spelling out: a schedule records a window of mini-batches rather than the
+                # whole step, and its skip_first/wait/warmup phases push that window past the
+                # stages that run first (the log-prob forwards).
+                print(
+                    f"[Profiler] started for rank {self.rank}: scheduled collection "
+                    f"{self._schedule_kwargs}, recording a window of mini-batches, not the whole step"
+                )
+            else:
+                print(f"[Profiler] started for rank {self.rank}")
             self.prof.start()
             Profiler._active_prof = self.prof
             Profiler._define_count += 1
@@ -293,12 +321,30 @@ class Profiler(DistProfiler):
         if Profiler._active_prof is not None:
             Profiler._active_prof.step()
 
+    def _flush_partial_window(self) -> None:
+        """Make torch write a collection window that the step ended in the middle of.
+
+        torch only calls ``on_trace_ready`` once a window reaches its last (``RECORD_AND_SAVE``)
+        mini-batch. A step with fewer mini-batches than ``wait + warmup + active`` therefore
+        stops while the schedule is still in ``RECORD``, and torch drops everything it collected.
+        Promoting the pending action keeps that data: the difference between a short trace and no
+        trace at all.
+        """
+        record = getattr(torch.profiler.ProfilerAction, "RECORD", None)
+        record_and_save = getattr(torch.profiler.ProfilerAction, "RECORD_AND_SAVE", None)
+        if record is None or record_and_save is None:
+            return
+        if getattr(self.prof, "current_action", None) is record:
+            self.prof.current_action = record_and_save
+
     def stop(self):
         if not self.discrete and Profiler._define_count == 1:
             # Continuous mode emits a trailing step to flush the final window; when a
             # schedule is configured, stepping is driven per mini-batch instead.
             if not self._schedule_kwargs:
                 self.step()
+            else:
+                self._flush_partial_window()
             print(f"[Profiler] stopped for rank {self.rank}")
             self.prof.stop()
             Profiler._active_prof = None
