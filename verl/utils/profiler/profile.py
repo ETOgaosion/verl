@@ -308,11 +308,12 @@ class DistProfiler:
             logger.warning("profiler finish hook: command exited with %s on rank %s: %s", returncode, self.rank, cmd)
 
     def step(self):
-        """Advance the profiler schedule by one step, intended to be called per mini-batch.
+        """Mark the end of one training step in the trace, i.e. one whole RL cycle.
 
-        Delegates to the backend `step` when the tool supports scheduling (currently the
-        torch profiler with a configured `wait/warmup/active/repeat` schedule); for all
-        other backends this is a no-op.
+        Delegates to backends that label step boundaries (currently the torch profiler, which
+        writes torch's ``ProfilerStep#<n>``); for all others this is a no-op. It never changes
+        what gets collected -- ``global_profiler.steps`` decides that -- and the mini-batches a
+        step is made of are annotated inside the step instead of advancing it.
 
         Gated on enable/rank only (not `this_step`): the training loop may run inside a
         nested worker whose profiler was never explicitly started, while the underlying
@@ -411,5 +412,5 @@ class DistProfilerExtension:
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def step_profile(self) -> None:
-        """Advance the profiler schedule by one step (typically once per mini-batch)."""
+        """Mark the end of one training step in the trace."""
         self.profiler.step()

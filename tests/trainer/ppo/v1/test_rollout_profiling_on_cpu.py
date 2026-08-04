@@ -68,6 +68,23 @@ def test_unprofiled_step_leaves_rollout_engines_alone():
     manager.stop_profile.assert_not_called()
 
 
+def test_continuous_steps_report_the_step_boundary_instead_of_restarting():
+    # With profile_continuous_steps the collection opened by the previous step stays open, so this
+    # step has nothing to start. It still has to report that the previous step ended: one profiler
+    # step per RL step is what separates them in a trace that holds several.
+    manager = MagicMock()
+    trainer = _trainer(_StubTrainer, llm_server_manager=manager)
+    trainer.config = OmegaConf.create({"global_profiler": {"profile_continuous_steps": True, "steps": [1, 2]}})
+    trainer.prev_step_profile = True
+    trainer.curr_step_profile = True
+
+    trainer._start_profiling()
+
+    trainer.actor_rollout_wg.step_profile.assert_called_once()
+    trainer.actor_rollout_wg.start_profile.assert_not_called()
+    manager.start_profile.assert_not_called()
+
+
 def test_separate_async_also_profiles_standalone_replicas():
     hybrid, standalone = MagicMock(), MagicMock()
     trainer = _trainer(

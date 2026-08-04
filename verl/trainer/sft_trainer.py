@@ -383,8 +383,8 @@ class SFTTrainer:
                     self.training_client.start_profile()
                 # train for on batch
                 output = self.training_client.train_batch(data=data)
-                # Advance the profiler schedule once per step. No-op unless a torch
-                # profiler schedule (wait/warmup/active/repeat) is active.
+                # Close this training step's window in the trace, so a profiled run of several
+                # steps shows one profiler step per step rather than one long one.
                 self.training_client.step_profile()
 
                 if global_step == self.end_profile_step:

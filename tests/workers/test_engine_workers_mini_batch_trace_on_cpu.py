@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Where the torch profiler schedule is advanced inside the engine workers.
+"""How mini-batches show up in a trace of the engine workers.
 
-The schedule counts mini-batches, and it counts them wherever the worker hands one to the
-engine: once per mini-batch of the update loop, and once for a forward-only stage such as
-``compute_log_prob`` or the critic's values, which consumes its whole batch in one call. Miss
-the forward-only stages and a scheduled trace silently starts after them, holding update
-forward/backward passes and nothing else.
+A profiler step is one training step -- the whole RL cycle -- so the mini-batches the update loop
+divides the global batch into are annotated *inside* that step instead of advancing it. Advancing
+the profiler per mini-batch instead would put each of them in a window of its own, which is how
+traces used to end up holding update forward/backward passes and nothing else.
 
 These tests drive the worker methods with mocked engines, so no GPU or ray is needed.
 """
@@ -27,6 +26,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import torch
 from tensordict import TensorDict
 
 from verl.utils import tensordict_utils as tu
@@ -65,18 +65,22 @@ def _worker(engine):
     )
 
 
-def test_forward_only_stage_counts_as_one_mini_batch():
-    data = TensorDict({}, batch_size=[])
-    tu.assign_non_tensor(data, global_token_num=[4])
-    worker = _worker(_engine())
+def _record_names(monkeypatch):
+    """Collect the names of the record_function ranges the worker opens."""
+    names = []
 
-    assert TrainingWorker.infer_batch(worker, data) is None
-    worker.profiler.step.assert_called_once()
+    def fake_record_function(name):
+        names.append(name)
+        return nullcontext()
+
+    monkeypatch.setattr(torch.profiler, "record_function", fake_record_function)
+    return names
 
 
-def test_update_loop_counts_one_mini_batch_per_iteration(monkeypatch):
+def test_update_loop_names_each_mini_batch(monkeypatch):
     mini_batches = [TensorDict({}, batch_size=[]) for _ in range(3)]
     monkeypatch.setattr(tu, "make_iterator", lambda data, **kwargs: iter(mini_batches))
+    names = _record_names(monkeypatch)
 
     worker = _worker(_engine())
     worker.train_batch = MagicMock(return_value={})
@@ -85,4 +89,16 @@ def test_update_loop_counts_one_mini_batch_per_iteration(monkeypatch):
     tu.assign_non_tensor(data, num_mini_batch=3)
 
     assert TrainingWorker.train_mini_batch(worker, data) is None
-    assert worker.profiler.step.call_count == len(mini_batches)
+    # Numbered from the start of the step: without the index every iteration looks alike.
+    assert names == ["mini_batch0", "mini_batch1", "mini_batch2"]
+    # A mini-batch is a row in the step, not a step of its own.
+    worker.profiler.step.assert_not_called()
+
+
+def test_forward_only_stage_is_not_a_profiler_step():
+    data = TensorDict({}, batch_size=[])
+    tu.assign_non_tensor(data, global_token_num=[4])
+    worker = _worker(_engine())
+
+    assert TrainingWorker.infer_batch(worker, data) is None
+    worker.profiler.step.assert_not_called()

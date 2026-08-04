@@ -109,28 +109,6 @@ profiler:
       # True for each task has its own database, False for all tasks in one training step share one database.
       discrete: false
 
-      # Optional torch.profiler.schedule. Enabled only when active > 0, in which case
-      # profiler.step() advances wait/warmup/active/repeat once per mini-batch.
-      schedule:
-
-        # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
-        _target_: verl.utils.profiler.config.TorchProfilerScheduleConfig
-
-        # Mini-batches to skip before the first recording
-        skip_first: 0
-
-        # Idle mini-batches (no collection) before each recording
-        wait: 0
-
-        # Warmup mini-batches (tracing on, data discarded) before each recording
-        warmup: 0
-
-        # Mini-batches to record, i.e. how many each trace file holds; <= 0 disables scheduling
-        active: 0
-
-        # How many times to repeat wait -> warmup -> active; 0 repeats until profiling stops
-        repeat: 0
-
     # torch memory profiler config
     torch_memory:
 

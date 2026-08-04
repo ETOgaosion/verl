@@ -115,7 +115,6 @@ def get_torch_profiler(
     role: Optional[str] = None,
     save_file_prefix: Optional[str] = None,
     rank: int = 0,
-    schedule: Optional[dict] = None,
     profile_step: Optional[int] = None,
 ):
     """Build a ``torch.profiler.profile`` instance.
@@ -132,10 +131,6 @@ def get_torch_profiler(
             ``critic``/``ref``) so per-process traces are distinguishable.
         rank: Global rank, embedded in the trace filename (a fallback when
             ``torch.distributed`` is not initialized).
-        schedule: Optional kwargs for ``torch.profiler.schedule``
-            (``wait``/``warmup``/``active``/``repeat``/``skip_first``), counted in mini-batches.
-            When provided, the caller must drive ``prof.step()`` once per mini-batch to advance
-            the schedule.
         profile_step: Optional RL step being profiled, embedded in the filename.
     """
     # All traces land directly in save_path: the role is already part of the filename, so an
@@ -147,46 +142,14 @@ def get_torch_profiler(
         rank=rank, role=role, save_file_prefix=save_file_prefix, profile_step=profile_step
     )
 
-    # A scheduled profiler fires on_trace_ready once per collection window, so each file
-    # needs a suffix of its own; keep an invocation counter as a last-resort uniquifier.
+    # One collection window writes one file, but keep an invocation counter so a second
+    # flush on the same profiler cannot overwrite the first.
     handler_state = {"count": 0}
-
-    def _scheduled_mini_batch_range(step_num: int) -> tuple[int, int]:
-        """Mini-batches held by the window being flushed at ``step_num``.
-
-        verl advances the schedule once per mini-batch, so the last mini-batch in the window is the
-        one that just ran, ``step_num - 1``. The window's first mini-batch is derived from the
-        schedule rather than from ``active``, because a window can hold fewer mini-batches than
-        ``active``: when the step runs out of mini-batches mid-window, ``stop()`` flushes whatever
-        was collected.
-        """
-        skip_first = int(schedule.get("skip_first", 0) or 0)
-        wait = int(schedule.get("wait", 0) or 0)
-        warmup = int(schedule.get("warmup", 0) or 0)
-        active = max(int(schedule.get("active", 1) or 1), 1)
-
-        last_mb = max(step_num - 1, 0)
-        cycle_len = wait + warmup + active
-        cycle = max(last_mb - skip_first, 0) // cycle_len
-        # Recording starts after this cycle's skipped, idle and warmup mini-batches.
-        first_mb = skip_first + cycle * cycle_len + wait + warmup
-        return min(first_mb, last_mb), last_mb
 
     def _trace_handler(prof):
         idx = handler_state["count"]
         handler_state["count"] += 1
-        suffix = ""
-        if schedule:
-            # A scheduled file holds one collection window, so name the mini-batches it
-            # actually contains.
-            step_num = getattr(prof, "step_num", None)
-            if isinstance(step_num, int):
-                first_mb, last_mb = _scheduled_mini_batch_range(step_num)
-                suffix = f"_mb{first_mb}" if first_mb == last_mb else f"_mb{first_mb}-{last_mb}"
-            else:
-                suffix = f"_part{idx}"
-        elif idx:
-            suffix = f"_part{idx}"
+        suffix = f"_part{idx}" if idx else ""
         out_path = os.path.join(save_path, f"{base_file_name}{suffix}.json.gz")
         print(f"[Profiler] Saving trace to {out_path}")
         prof.export_chrome_trace(out_path)
@@ -199,20 +162,15 @@ def get_torch_profiler(
     if not contents or "cuda" in contents:
         activities.append(torch.profiler.ProfilerActivity.CUDA)
 
-    profile_kwargs = dict(
+    # No torch.profiler.schedule: collection runs from start() to stop(), which is one RL step
+    # (or a run of consecutive ones with global_profiler.profile_continuous_steps).
+    return torch.profiler.profile(
         activities=activities,
         with_stack="stack" in contents,
         record_shapes="shapes" in contents,
         profile_memory="memory" in contents,
         on_trace_ready=_trace_handler,
     )
-
-    # torch.profiler.schedule drives the wait/warmup/active/repeat state machine
-    # via prof.step(); without it the profiler collects continuously.
-    if schedule:
-        profile_kwargs["schedule"] = torch.profiler.schedule(**schedule)
-
-    return torch.profiler.profile(**profile_kwargs)
 
 
 class Profiler(DistProfiler):
@@ -222,7 +180,7 @@ class Profiler(DistProfiler):
     with support for:
 
     - CPU and CUDA activity profiling
-    - Configurable profiling schedule (wait/warmup/active steps)
+    - One profiler step per training step, with stages and mini-batches annotated inside it
     - Multi-rank profiling support
     - Chrome trace export
 
@@ -232,10 +190,15 @@ class Profiler(DistProfiler):
 
     _define_count = 0
     # Process-global handle to the currently running torch profiler. torch.profiler is
-    # process-wide, so a step() issued by one Profiler instance (e.g. the inner actor
-    # TrainingWorker running the mini-batch loop) must advance the profiler that another
-    # instance started (e.g. the outer ActorRolloutRefWorker).
+    # process-wide, so a step() issued by one Profiler instance (e.g. an inner
+    # TrainingWorker) must advance the profiler that another instance started (e.g. the
+    # outer ActorRolloutRefWorker).
     _active_prof = None
+    # The instance that opened _active_prof. Colocated roles (actor and a reference model in
+    # one process) each own a Profiler and are each told when a training step ends, but the
+    # trace has a single timeline: only the owner may close a step in it, or one step boundary
+    # per role would show up as several.
+    _owner = None
 
     def __init__(
         self,
@@ -259,96 +222,57 @@ class Profiler(DistProfiler):
         self.save_path = self.config.save_path
         # Align with other profilers: read discrete mode, default to False for torch profiler
         self.discrete = getattr(self.tool_config, "discrete", False)
-        # Resolved torch.profiler.schedule kwargs for the active run (None => continuous).
-        self._schedule_kwargs = None
         # RL step of the profiled window, reported by the trainer on start().
         self._profile_step = None
 
     def check(self):
         return self.prof is not None
 
-    def _resolve_schedule_kwargs(self) -> Optional[dict]:
-        """Build torch.profiler.schedule kwargs from tool_config, or None to disable."""
-        sched = getattr(self.tool_config, "schedule", None) if self.tool_config else None
-        if sched is None:
-            return None
-        active = int(getattr(sched, "active", 0) or 0)
-        if active <= 0:
-            return None
-        return {
-            "skip_first": int(getattr(sched, "skip_first", 0) or 0),
-            "wait": int(getattr(sched, "wait", 0) or 0),
-            "warmup": int(getattr(sched, "warmup", 0) or 0),
-            "active": active,
-            "repeat": int(getattr(sched, "repeat", 0) or 0),
-        }
-
     def start(self, **kwargs):
         role = kwargs.get("role", None)
         # Recorded outside the discrete gate: discrete mode opens its profilers later, from
         # annotate(), and still needs to know which RL step it is collecting.
-        self._profile_step = kwargs.get("profile_step", kwargs.get("global_step"))
+        profile_step = kwargs.get("profile_step", kwargs.get("global_step"))
         if not self.discrete and Profiler._define_count == 0:
-            self._schedule_kwargs = self._resolve_schedule_kwargs()
+            self._profile_step = profile_step
             self.prof = get_torch_profiler(
                 contents=self.contents,
                 save_path=self.save_path,
                 role=role,
                 save_file_prefix=self.save_file_prefix,
                 rank=self.rank,
-                schedule=self._schedule_kwargs,
                 profile_step=self._profile_step,
             )
-            if self._schedule_kwargs:
-                # Worth spelling out: a schedule records a window of mini-batches rather than the
-                # whole step, and its skip_first/wait/warmup phases push that window past the
-                # stages that run first (the log-prob forwards).
-                print(
-                    f"[Profiler] started for rank {self.rank}: scheduled collection "
-                    f"{self._schedule_kwargs}, recording a window of mini-batches, not the whole step"
-                )
-            else:
-                print(f"[Profiler] started for rank {self.rank}")
+            print(f"[Profiler] started for rank {self.rank}")
             self.prof.start()
             Profiler._active_prof = self.prof
+            Profiler._owner = self
             Profiler._define_count += 1
+            return
+
+        self._profile_step = profile_step
 
     def step(self):
-        """Advance the process-global active profiler by one step (per mini-batch).
+        """End the current training step's window in the trace and open the next one.
 
-        No-op when no torch profiler is currently running.
+        This is torch's ``ProfilerStep#<n>``, which verl advances once per training step -- the
+        whole RL cycle, not the mini-batches it is made of. Collection is unaffected: without a
+        ``torch.profiler.schedule`` every step is recorded, so this only labels the boundary.
+
+        No-op when no torch profiler is currently running, or when this instance does not own
+        the running one.
         """
-        if Profiler._active_prof is not None:
+        if Profiler._active_prof is not None and Profiler._owner in (None, self):
             Profiler._active_prof.step()
-
-    def _flush_partial_window(self) -> None:
-        """Make torch write a collection window that the step ended in the middle of.
-
-        torch only calls ``on_trace_ready`` once a window reaches its last (``RECORD_AND_SAVE``)
-        mini-batch. A step with fewer mini-batches than ``wait + warmup + active`` therefore
-        stops while the schedule is still in ``RECORD``, and torch drops everything it collected.
-        Promoting the pending action keeps that data: the difference between a short trace and no
-        trace at all.
-        """
-        record = getattr(torch.profiler.ProfilerAction, "RECORD", None)
-        record_and_save = getattr(torch.profiler.ProfilerAction, "RECORD_AND_SAVE", None)
-        if record is None or record_and_save is None:
-            return
-        if getattr(self.prof, "current_action", None) is record:
-            self.prof.current_action = record_and_save
 
     def stop(self):
         if not self.discrete and Profiler._define_count == 1:
-            # Continuous mode emits a trailing step to flush the final window; when a
-            # schedule is configured, stepping is driven per mini-batch instead.
-            if not self._schedule_kwargs:
-                self.step()
-            else:
-                self._flush_partial_window()
+            # Close the last training step's window before tearing the profiler down.
+            self.step()
             print(f"[Profiler] stopped for rank {self.rank}")
             self.prof.stop()
             Profiler._active_prof = None
-            self._schedule_kwargs = None
+            Profiler._owner = None
             Profiler._define_count -= 1
 
     def annotate(self, message: Optional[str] = None, role: Optional[str] = None, **kwargs_outer) -> Callable:

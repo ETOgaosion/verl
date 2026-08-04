@@ -36,64 +36,15 @@ class NsightToolConfig(BaseConfig):
 
 
 @dataclass
-class TorchProfilerScheduleConfig(BaseConfig):
-    """Schedule for ``torch.profiler.schedule``.
-
-    Field names mirror the official ``torch.profiler.schedule`` API. The profiler runs
-    ``skip_first``, then repeats ``wait`` -> ``warmup`` -> ``active`` ``repeat`` times,
-    writing one trace file per ``active`` group. Scheduling is only enabled when
-    ``active > 0``; otherwise the profiler runs in continuous mode (collect everything
-    between start and stop).
-
-    Every field counts *mini-batches*, not RL steps: the unit is one ``DistProfiler.step()``
-    call, which verl issues once per mini-batch handed to the engine -- once per mini-batch of
-    the update loop, and once for each forward-only stage (log-prob, critic values), which
-    consumes its whole batch in a single call. Which RL steps get profiled at all is decided by
-    ``global_profiler.steps``.
-
-    Because that count spans the whole step, a non-zero ``skip_first``/``wait``/``warmup`` starts
-    the recording somewhere after the log-prob forwards. Keep them at 0 (or leave ``active`` at 0
-    for continuous collection) to have the trace start at the beginning of the step.
-    """
-
-    # Number of mini-batches to skip at the very beginning (before the first wait).
-    skip_first: int = 0
-    # Number of mini-batches to idle (no collection) before each recording.
-    wait: int = 0
-    # Number of mini-batches to warm up (tracing on, data discarded) before each recording.
-    warmup: int = 0
-    # Number of mini-batches to record, i.e. how many each trace file holds. <= 0 disables scheduling.
-    active: int = 0
-    # How many times to repeat wait -> warmup -> active. 0 means repeat until profiling stops.
-    repeat: int = 0
-    name: str = "torch_schedule"
-
-    def __post_init__(self) -> None:
-        """config validation logics go here"""
-        for field_name in ("skip_first", "wait", "warmup", "active", "repeat"):
-            value = getattr(self, field_name)
-            assert isinstance(value, int), f"{field_name} must be int, got {type(value)}"
-            assert value >= 0, f"{field_name} must be >= 0, got {value}"
-
-    @property
-    def enabled(self) -> bool:
-        """Scheduling only takes effect when at least one active step is requested."""
-        return self.active > 0
-
-    def to_torch_kwargs(self) -> dict:
-        """Return kwargs for ``torch.profiler.schedule``."""
-        return {
-            "skip_first": self.skip_first,
-            "wait": self.wait,
-            "warmup": self.warmup,
-            "active": self.active,
-            "repeat": self.repeat,
-        }
-
-
-@dataclass
 class TorchProfilerToolConfig(BaseConfig):
-    """Torch profiler tool config."""
+    """Torch profiler tool config.
+
+    A profiled step is collected whole: ``global_profiler.steps`` picks which RL steps to
+    collect, and everything the worker runs in such a step lands in one trace, with each
+    stage and each update mini-batch annotated inside it. There is no sub-step sampling
+    knob (torch's ``schedule``), because its unit -- one ``profiler.step()`` -- is the RL
+    step here, and RL steps are already selected by ``global_profiler.steps``.
+    """
 
     # options: cuda, cpu, memory, shapes, stack. Empty means collect everything.
     # CPU activity is collected either way (the per-stage record_function markers are CPU-side
@@ -106,9 +57,6 @@ class TorchProfilerToolConfig(BaseConfig):
     # Stop collecting profiler data at this response-token index (exclusive).
     # None means collect until the end.
     profile_token_end: Optional[int] = None
-    # Optional torch.profiler.schedule (wait/warmup/active/repeat/skip_first).
-    # When set with active > 0, DistProfiler.step() drives the schedule per mini-batch.
-    schedule: Optional[TorchProfilerScheduleConfig] = None
     name: str = "torch"
 
     def __post_init__(self) -> None:
