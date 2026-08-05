@@ -74,10 +74,10 @@ Example: move every rank's reports into `save_path` and then upload them to HDFS
                 all_ranks: True
 ```
 
-On the command line, single-quote the command so your shell does not expand `$VERL_PROFILE_SAVE_PATH` before the worker sees it:
+On the command line the value needs two levels of quoting: single quotes so your shell does not expand `$VERL_PROFILE_SAVE_PATH` before the worker sees it, and double quotes *inside* them wrapping the whole command, because Hydra's override parser rejects an unquoted value containing `$` or `"`:
 
 ```bash
-    global_profiler.finish_hook_cmd='hdfs dfs -put -f "$VERL_PROFILE_SAVE_PATH"/*.nsys-rep hdfs:///my/profiles/'
+    global_profiler.finish_hook_cmd='"hdfs dfs -put -f $VERL_PROFILE_SAVE_PATH/*.nsys-rep hdfs:///my/profiles/"'
 ```
 
 **Observing the hook.** Every `stop_profile` prints a `[Profiler][finish_hook]` line to the worker's stdout stating whether a command is configured and whether the current rank was selected, followed by the command line itself, its merged stdout/stderr streamed live, and its exit code. These are plain prints rather than logger calls so they show up in the Ray worker logs regardless of the logging level. The command failing (non-zero exit or launch error) never interrupts training.

@@ -260,11 +260,17 @@ already keeps the files unique and self-describing. This also means `finish_hook
 receives `save_path` via `VERL_PROFILE_SAVE_PATH`, sees all of them without recursing.
 
 To ship the traces somewhere after each profiled step, set the hook once on `global_profiler`
-(every role inherits it) and single-quote it so your shell does not expand the variable early:
+(every role inherits it). On the command line, quote the value twice: single quotes so your shell
+does not expand the variable early, and double quotes *inside* them because Hydra's override parser
+rejects an unquoted value containing `$` or `"`:
 
 ```bash
-    global_profiler.finish_hook_cmd='my-upload-tool "$VERL_PROFILE_SAVE_PATH"'
+    global_profiler.finish_hook_cmd='"my-upload-tool $VERL_PROFILE_SAVE_PATH"'
 ```
+
+Note that the double quotes must wrap the whole value: `'my-upload-tool "$VERL_PROFILE_SAVE_PATH"'`
+fails to parse. If the command needs quoting of its own (paths with spaces), point the hook at a
+small script instead and read the environment variables there.
 
 The hook prints the command, its output and its exit code to the worker's log on every
 `stop_profile`. Rollout replicas run it from their own server actor once the engine has flushed,
