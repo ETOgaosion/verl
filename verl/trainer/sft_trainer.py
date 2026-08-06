@@ -383,8 +383,9 @@ class SFTTrainer:
                     self.training_client.start_profile()
                 # train for on batch
                 output = self.training_client.train_batch(data=data)
-                # Close this training step's window in the trace, so a profiled run of several
-                # steps shows one profiler step per step rather than one long one.
+                # SFT has one train_batch per step (no PPO-style mini-batch loop), so advancing
+                # the profiler here is the per-step boundary; it also drives a torch.profiler
+                # schedule when one is configured (its unit is one such training step).
                 self.training_client.step_profile()
 
                 if global_step == self.end_profile_step:

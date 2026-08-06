@@ -207,11 +207,11 @@ class NPUProfiler(DistProfiler):
             NPUProfiler._define_count -= 1
 
     def step(self):
-        """No-op training-step boundary hook.
+        """No-op per-mini-batch hook.
 
-        The NPU profiler is driven by explicit start/stop calls, one collection per profiled
-        step, so a step boundary inside a collection has nothing to mark. It must still be
-        defined here: without it, the dispatcher's
+        The actor update loop calls this once per mini-batch to drive the torch profiler's
+        schedule, but the NPU profiler is driven by explicit start/stop calls, so it has nothing
+        to advance here. It must still be defined: without it, the dispatcher's
         ``getattr(self._impl, "step", lambda: None)`` resolves to the inherited
         ``DistProfiler.step`` (backend impls subclass ``DistProfiler`` but never run its
         ``__init__``), which then reads dispatcher-only state such as ``_enable`` and raises

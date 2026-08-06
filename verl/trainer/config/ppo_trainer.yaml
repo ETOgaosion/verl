@@ -292,8 +292,10 @@ global_profiler:
   save_path: "outputs/profile"
 
   # When profiling finishes, move backend artifacts written to a framework-fixed location into
-  # save_path. Currently only affects nsys: Ray hardcodes its Nsight output dir
-  # (/tmp/ray/session_latest/logs/nsight). Inherited by every role's profiler.
+  # save_path: nsys reports (Ray hardcodes /tmp/ray/session_latest/logs/nsight) and rollout engine
+  # traces (the engines only accept a directory, so each replica writes into a sub-directory).
+  # Turn this on to get every trace of a step in save_path itself, which is what post-processing
+  # that does not walk sub-directories needs. Inherited by every role's profiler.
   relocate_results: False
 
   # Shell command executed on the selected ranks when profiling finishes (after relocate_results),

@@ -21,7 +21,11 @@ import torch
 from omegaconf import OmegaConf
 
 from verl.utils.config import omega_conf_to_dataclass
-from verl.utils.profiler.config import ProfilerConfig, TorchProfilerToolConfig
+from verl.utils.profiler.config import (
+    ProfilerConfig,
+    TorchProfilerScheduleConfig,
+    TorchProfilerToolConfig,
+)
 from verl.utils.profiler.profile import DistProfiler, _NoOpProfiler
 from verl.utils.profiler.torch_profile import (
     Profiler,
@@ -35,12 +39,10 @@ class TestTorchProfile(unittest.TestCase):
         # Reset process-global Profiler class state so tests don't leak into each other.
         Profiler._define_count = 0
         Profiler._active_prof = None
-        Profiler._owner = None
 
     def tearDown(self):
         Profiler._define_count = 0
         Profiler._active_prof = None
-        Profiler._owner = None
 
     @patch("torch.profiler.profile")
     def test_get_torch_profiler(self, mock_profile):
@@ -283,14 +285,152 @@ class TestTorchProfile(unittest.TestCase):
 
     @patch("torch.profiler.schedule")
     @patch("torch.profiler.profile")
-    def test_collection_is_never_sub_sampled(self, mock_profile, mock_schedule):
-        # A profiled step is collected whole: no torch.profiler.schedule, so nothing can drop the
-        # stages that run before the update loop (which is what sub-step sampling used to do).
+    def test_no_schedule_collects_continuously(self, mock_profile, mock_schedule):
+        # Without a schedule, collection runs from start() to stop() with no torch.profiler.schedule.
         get_torch_profiler(contents=["cpu"], save_path="/tmp/test", rank=0)
 
         mock_schedule.assert_not_called()
         _, kwargs = mock_profile.call_args
         self.assertNotIn("schedule", kwargs)
+
+    @patch("torch.profiler.schedule")
+    @patch("torch.profiler.profile")
+    def test_schedule_is_passed_through_when_provided(self, mock_profile, mock_schedule):
+        # A schedule dict is forwarded to torch.profiler.schedule and attached to the profiler.
+        sched = {"skip_first": 1, "wait": 1, "warmup": 1, "active": 2, "repeat": 0}
+        get_torch_profiler(contents=["cpu"], save_path="/tmp/test", rank=0, schedule=sched)
+
+        mock_schedule.assert_called_once_with(**sched)
+        _, kwargs = mock_profile.call_args
+        self.assertIn("schedule", kwargs)
+
+    def test_continuous_schedule_keeps_only_active(self):
+        # In continuous mode the trace also holds the stages that run before the update loop, so the
+        # schedule must not skip/wait/warmup (that would drop them); only `active` is honored.
+        tool_config = TorchProfilerToolConfig(
+            contents=["cpu"],
+            discrete=False,
+            schedule=TorchProfilerScheduleConfig(skip_first=3, wait=2, warmup=1, active=2, repeat=5),
+        )
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+
+        self.assertEqual(
+            profiler._resolve_continuous_schedule_kwargs(),
+            {"skip_first": 0, "wait": 0, "warmup": 0, "active": 2, "repeat": 1},
+        )
+        # The full schedule (used for the discrete update stage) keeps every field.
+        self.assertEqual(
+            profiler._resolve_schedule_kwargs(),
+            {"skip_first": 3, "wait": 2, "warmup": 1, "active": 2, "repeat": 5},
+        )
+
+    def test_schedule_disabled_when_active_not_positive(self):
+        tool_config = TorchProfilerToolConfig(
+            contents=["cpu"], discrete=False, schedule=TorchProfilerScheduleConfig(active=0)
+        )
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+        self.assertIsNone(profiler._resolve_schedule_kwargs())
+        self.assertIsNone(profiler._resolve_continuous_schedule_kwargs())
+
+    @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
+    def test_discrete_update_stage_is_scheduled_and_drives_active_prof(self, mock_get_profiler):
+        # In discrete mode only the update stage (scheduled=True) carries the schedule, and it must
+        # expose its profiler process-globally so the inner update loop's step() advances it.
+        mock_prof_instance = MagicMock()
+        mock_get_profiler.return_value = mock_prof_instance
+
+        tool_config = TorchProfilerToolConfig(
+            contents=["cpu"],
+            discrete=True,
+            schedule=TorchProfilerScheduleConfig(skip_first=1, wait=1, warmup=1, active=2, repeat=0),
+        )
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+        profiler.start(role="train", profile_step=5)
+
+        active_prof_during_stage = {}
+
+        @profiler.annotate(role="actor_update", scheduled=True)
+        def update_actor():
+            # The update loop steps the process-global profiler while the stage runs.
+            active_prof_during_stage["prof"] = Profiler._active_prof
+            return "done"
+
+        self.assertEqual(update_actor(), "done")
+        _, kwargs = mock_get_profiler.call_args
+        self.assertEqual(kwargs["schedule"], {"skip_first": 1, "wait": 1, "warmup": 1, "active": 2, "repeat": 0})
+        self.assertTrue(kwargs["name_mini_batch_window"])
+        # The stage's profiler was the active one during the call, and is cleared afterwards.
+        self.assertIs(active_prof_during_stage["prof"], mock_prof_instance)
+        self.assertIsNone(Profiler._active_prof)
+
+    @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
+    def test_discrete_non_update_stage_is_not_scheduled(self, mock_get_profiler):
+        # A stage that does not iterate mini-batches (no scheduled=True) must collect in full: it
+        # never calls step(), so a wait/warmup schedule would leave it recording nothing.
+        mock_get_profiler.return_value = MagicMock()
+        tool_config = TorchProfilerToolConfig(
+            contents=["cpu"],
+            discrete=True,
+            schedule=TorchProfilerScheduleConfig(skip_first=1, wait=1, warmup=1, active=2, repeat=0),
+        )
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+        profiler.start(role="train", profile_step=5)
+
+        @profiler.annotate(role="ref_compute_log_prob")
+        def compute_ref_log_prob():
+            return "done"
+
+        self.assertEqual(compute_ref_log_prob(), "done")
+        _, kwargs = mock_get_profiler.call_args
+        self.assertIsNone(kwargs["schedule"])
+        self.assertFalse(kwargs["name_mini_batch_window"])
+        # A non-scheduled stage never claims the process-global slot.
+        self.assertIsNone(Profiler._active_prof)
+
+    @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
+    def test_continuous_stop_flushes_partial_window_when_scheduled(self, mock_get_profiler):
+        # With a schedule, stop() must not emit a trailing step() (that would advance the schedule);
+        # it flushes any window the update loop ended mid-way instead.
+        mock_prof_instance = MagicMock()
+        # current_action left as a plain attribute so _flush_partial_window can inspect it.
+        mock_prof_instance.current_action = torch.profiler.ProfilerAction.RECORD
+        mock_get_profiler.return_value = mock_prof_instance
+
+        tool_config = TorchProfilerToolConfig(
+            contents=["cpu"], discrete=False, schedule=TorchProfilerScheduleConfig(active=3)
+        )
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+
+        profiler.start(role="train", profile_step=1)
+        profiler.stop()
+
+        # A pending RECORD window is promoted so torch saves it on stop() instead of dropping it,
+        # and no trailing step() is issued.
+        self.assertIs(mock_prof_instance.current_action, torch.profiler.ProfilerAction.RECORD_AND_SAVE)
+        mock_prof_instance.step.assert_not_called()
+        mock_prof_instance.stop.assert_called_once()
+
+    @patch("torch.profiler.profile")
+    def test_scheduled_files_are_named_by_mini_batch_window(self, mock_profile):
+        # A discrete scheduled file holds one window of mini-batches, so its name states which.
+        sched = {"skip_first": 1, "wait": 1, "warmup": 1, "active": 2, "repeat": 0}
+        with tempfile.TemporaryDirectory() as save_path:
+            get_torch_profiler(
+                contents=["cpu"], save_path=save_path, rank=0, schedule=sched, name_mini_batch_window=True
+            )
+            on_trace_ready = mock_profile.call_args[1]["on_trace_ready"]
+
+            # First window flushed at step_num=5 -> recorded mini-batches 3 and 4.
+            mock_prof = MagicMock()
+            mock_prof.step_num = 5
+            on_trace_ready(mock_prof)
+            (out_path,), _ = mock_prof.export_chrome_trace.call_args
+            self.assertIn("_mb3-4", os.path.basename(out_path))
 
     @patch("torch.profiler.profile")
     def test_second_flush_does_not_overwrite_the_first(self, mock_profile):
@@ -310,10 +450,10 @@ class TestTorchProfile(unittest.TestCase):
             self.assertTrue(names[1].endswith("_part1.json.gz"), names[1])
 
     @patch("verl.utils.profiler.torch_profile.get_torch_profiler")
-    def test_only_the_owning_profiler_closes_a_step(self, mock_get_profiler):
+    def test_colocated_roles_share_one_collection(self, mock_get_profiler):
         # A colocated actor and reference model each own a Profiler but share one process-global
-        # collection, and the trainer reports the end of a training step to both. Marking it twice
-        # would show two step boundaries where one training step ended.
+        # collection: only the first start() opens it, and step() from either advances that one
+        # profiler (the actor update loop is what actually drives step() per mini-batch).
         mock_prof_instance = MagicMock()
         mock_get_profiler.return_value = mock_prof_instance
 
@@ -326,14 +466,16 @@ class TestTorchProfile(unittest.TestCase):
         colocated_ref.start(profile_step=1)
         # One collection for the process, opened by the first role to start.
         mock_get_profiler.assert_called_once()
+        self.assertIs(Profiler._active_prof, mock_prof_instance)
 
+        # Any Profiler instance advances the shared process-global collection (per mini-batch).
         actor.step()
         colocated_ref.step()
-        self.assertEqual(mock_prof_instance.step.call_count, 1)
-
-        # stop() closes the last step's window before tearing the collection down.
-        actor.stop()
         self.assertEqual(mock_prof_instance.step.call_count, 2)
+
+        # Without a schedule, stop() emits a trailing step() to flush, then tears the collection down.
+        actor.stop()
+        self.assertEqual(mock_prof_instance.step.call_count, 3)
         mock_prof_instance.stop.assert_called_once()
         self.assertIsNone(Profiler._active_prof)
 

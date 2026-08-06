@@ -39,8 +39,7 @@ You can customize the PyTorch Profiler behavior using the following fields under
     *   **`stack`**: Record source code file and line number.
 * **`profile_token_start`**: Effective only for the rollout role; defines the start response-token index for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
 * **`profile_token_end`**: Effective only for the rollout role; defines the stop response-token index (exclusive) for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
-
-There is no sub-step sampling knob ([`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule)), because in verl one profiler step *is* one RL step, and which RL steps to collect is already `global_profiler.steps`. A profiled step is therefore always collected whole, with its stages and mini-batches annotated inside the trace -- see [Steps and mini-batches inside a trace](#3-steps-and-mini-batches-inside-a-trace).
+* **`schedule`**: Optional [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) over the **update loop's mini-batches**, so a step with many identical update mini-batches does not bloat the trace. `verl` advances the schedule once per update mini-batch (`skip_first`/`wait`/`warmup`/`active`/`repeat`), and only the actor/critic update loop advances it -- the log-prob forwards and rollout are never sub-sampled. Enabled only when `active > 0`. Its exact effect depends on `discrete`; see [Scheduling the update loop's mini-batches](#3-scheduling-the-update-loops-mini-batches).
 
 
 ## Examples
@@ -122,31 +121,81 @@ When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance d
    decoupled from the step in the V1 trainer -- prompts are served asynchronously and consumed from
    the replay buffer -- so there is no single generation call to wrap.
 
-4. Trace Location: each replica writes to its own
-   `<save_path>/agent_loop_rollout_replica_<n>/` directory on the node that hosts it, and
-   `finish_hook_cmd` runs there with `VERL_PROFILE_SAVE_PATH` pointing at that directory. Set the
-   hook if you need the traces collected somewhere central, since nothing else moves them off the
-   replica's node.
+4. Trace Location: the engines take an output directory rather than a file name, so each replica
+   writes into its own `<save_path>/agent_loop_rollout_replica_<n>/` on the node that hosts it.
+   Set `global_profiler.relocate_results: True` to have those traces moved up into `save_path`
+   itself when the step finishes, named `rollout-replica<n>_<engine's own file name>` so the
+   replica is still identifiable; that keeps every trace of a step in the one directory you
+   configured, which is what post-processing that does not walk sub-directories needs.
+   `finish_hook_cmd` then runs on the replica's node, and is the only thing that moves traces off
+   it.
 
-### 3. Steps and mini-batches inside a trace
+### 3. Scheduling the update loop's mini-batches
 
-One profiler step is one RL step -- the whole cycle -- and that is the unit `global_profiler.steps`
-selects and the unit torch labels as `ProfilerStep#<n>` in the trace. The mini-batches a step is
-made of are *annotated inside* it rather than being steps of their own:
+The unit `global_profiler.steps` selects is one RL step, and by default a profiled step is
+collected whole: everything the worker runs lands in one trace, with each stage and each update
+mini-batch annotated inside it:
 
 * the update loop wraps each iteration in a `mini_batch<i>` row nested under `update_actor` /
-  `critic_update`, numbered from `0` within the step;
+  `critic_update`, numbered from `0` within the step. `verl` also advances the profiler once per
+  such mini-batch, so torch labels each as a `ProfilerStep#<n>`;
 * a forward-only stage (`compute_log_prob`, `compute_ref_log_prob`, critic values) consumes its
   whole batch in one call, so it is one row named after the stage, with the engine's micro-batches
-  visible as the repeated forwards inside it.
+  visible as the repeated forwards inside it. These stages never advance the profiler.
 
-So a profiled step gives you one file per process holding that whole step, and you navigate it by
-searching the stage rows, not by picking a sub-window in advance. With
-`global_profiler.profile_continuous_steps: True` a run of consecutive profiled steps shares one
-file, and each RL step in it is a separate `ProfilerStep#<n>`.
+When the update loop has many identical mini-batches, recording all of them bloats the trace.
+`tool_config.torch.schedule` sub-samples them -- and only them. Because `verl` advances the
+schedule once per update mini-batch, the log-prob and rollout stages are always kept in full. What
+the schedule can do depends on `discrete`:
 
-If a step's trace is too large to be workable, narrow it with `discrete: True`, which writes one
-file per stage, or profile fewer ranks (`ranks`/`all_ranks`).
+* **`discrete: False`** (one continuous trace per process). The log-prob/rollout stages run before
+  the first mini-batch, and torch can only persist a recorded window that ends in
+  `RECORD_AND_SAVE`, so dropping the *leading* mini-batches would also discard those earlier
+  stages. Only **`active`** is honored here: the trace keeps every other stage in full plus the
+  first `active` update mini-batches; `skip_first`/`wait`/`warmup`/`repeat` are ignored.
+
+  ```yaml
+  actor_rollout_ref:
+    actor:
+      profiler:
+        enable: True
+        all_ranks: True
+        tool_config:
+          torch:
+            discrete: False
+            schedule:
+              active: 2   # rollout + all log-prob stages in full, then only mini_batch0..1
+  ```
+
+* **`discrete: True`** (one trace per stage). The update stage is profiled in isolation, so the
+  full schedule applies to its mini-batches: `skip_first`/`wait`/`warmup` drop the leading ones and
+  only the `active` window is kept, repeated `repeat` times (`0` = until the loop ends). The
+  log-prob, rollout and ref stages each get their own full trace, untouched by the schedule. The
+  update-stage files are tagged with the mini-batch window they hold, e.g. `..._mb3-4`.
+
+  ```yaml
+  actor_rollout_ref:
+    actor:
+      profiler:
+        enable: True
+        all_ranks: True
+        tool_config:
+          torch:
+            discrete: True
+            schedule:
+              skip_first: 1
+              wait: 1
+              warmup: 1
+              active: 2   # actor_update trace holds only mini_batch3..4; log-prob/ref traces stay full
+              repeat: 0
+  ```
+
+So you navigate a `discrete: False` trace by searching the stage rows, and pick a sub-window of
+mini-batches in advance only through the schedule. With `global_profiler.profile_continuous_steps:
+True` a run of consecutive profiled steps shares one file.
+
+If a step's trace is too large to be workable, sub-sample the update loop with `schedule`, narrow
+it with `discrete: True` (one file per stage), or profile fewer ranks (`ranks`/`all_ranks`).
 
 ## Output file naming
 
@@ -178,7 +227,8 @@ single process. A profiled step leaves you with:
   hold the work those workers actually run: the log-prob forwards and the actor update's
   forward/backward/optimizer. This is why the scope is called `train` and not `e2e`.
 * **Rollout traces**, written by the inference engines themselves into
-  `<save_path>/agent_loop_rollout_replica_<n>/`, on the node hosting each replica. Generation
+  `<save_path>/agent_loop_rollout_replica_<n>/` (or into `save_path` with
+  `relocate_results: True`), on the node hosting each replica. Generation
   never appears in a training-side trace: with Agent Loop the engines run in their own
   processes, and in the V1 trainer generation is decoupled from the step entirely (the trainer
   samples already-generated data from the replay buffer), so the actor process is simply idle
@@ -224,10 +274,13 @@ Seeing a single `actor...` file per rank, with no separate reference/critic file
   and turning the actor's profiler off also drops the reference stages that share the process.
 * **The role may not exist.** There is no critic unless the algorithm uses a value model (GRPO
   and friends do not), and no reference model unless a KL term needs one.
-* **Traces collected by an older verl.** Versions that exposed a `torch.profiler.schedule`
-  (`tool_config.torch.schedule`) bounded collection to a window of mini-batches, and a non-zero
-  `skip_first`/`wait`/`warmup` put that window past the log-prob forwards, leaving a trace of update
-  forward/backward passes and nothing else. Collection is now always the whole step.
+* **A schedule that drops the log-prob forwards.** `tool_config.torch.schedule` sub-samples the
+  update loop's mini-batches. In `discrete: False` this is deliberately limited to `active` only,
+  so the earlier stages survive; but on older verl (or if you hand-build a schedule) a non-zero
+  `skip_first`/`wait`/`warmup` in continuous mode pushed the recorded window past the log-prob
+  forwards, leaving a trace of update forward/backward passes and nothing else. Set only `active`
+  in `discrete: False`, or use `discrete: True` to schedule the update stage while the log-prob
+  stages keep their own full traces.
 * **Traces collected before CPU activity became unconditional.** A device-only run
   (`contents: [cuda]` on an older verl) has no `record_function` ranges and no operator names, so
   no stage can be located in it even though the kernels of every stage are there, and a log-prob
@@ -256,25 +309,35 @@ traces without CUDA activity.
 
 Collected trace files (usually `.json` or `.json.gz`) are stored flat in the configured
 `save_path`: every role, rank and scope writes there directly, since the naming scheme above
-already keeps the files unique and self-describing. This also means `finish_hook_cmd`, which
-receives `save_path` via `VERL_PROFILE_SAVE_PATH`, sees all of them without recursing.
+already keeps the files unique and self-describing. Rollout engine traces are the one exception,
+because the engines are given a directory to write to; `relocate_results: True` pulls them into
+`save_path` as well.
 
 To ship the traces somewhere after each profiled step, set the hook once on `global_profiler`
-(every role inherits it). On the command line, quote the value twice: single quotes so your shell
-does not expand the variable early, and double quotes *inside* them because Hydra's override parser
-rejects an unquoted value containing `$` or `"`:
+(every role inherits it). Every rank runs it against the `save_path` you configured, including the
+rollout replicas, so the command can just name that path:
 
 ```bash
-    global_profiler.finish_hook_cmd='"my-upload-tool $VERL_PROFILE_SAVE_PATH"'
+    global_profiler.save_path="$PROFILE_SAVE_PATH" \
+    global_profiler.relocate_results=True \
+    global_profiler.finish_hook_cmd="my-upload-tool $PROFILE_SAVE_PATH"
 ```
 
-Note that the double quotes must wrap the whole value: `'my-upload-tool "$VERL_PROFILE_SAVE_PATH"'`
-fails to parse. If the command needs quoting of its own (paths with spaces), point the hook at a
-small script instead and read the environment variables there.
+A command that would rather be told the path than repeat it can read `VERL_PROFILE_SAVE_PATH`
+(the same value) from the environment, next to `VERL_PROFILE_TOOL`, `VERL_PROFILE_RANK`,
+`VERL_PROFILE_PID` and `VERL_PROFILE_ROLE`. Quote such a value in single quotes so your shell does
+not expand it early:
+
+```bash
+    global_profiler.finish_hook_cmd='my-upload-tool $VERL_PROFILE_SAVE_PATH'
+```
+
+Either way the value must not contain quotes of its own -- Hydra's override parser rejects
+`'my-upload-tool "$VERL_PROFILE_SAVE_PATH"'`. If the command needs quoting (paths with spaces),
+point the hook at a small script instead.
 
 The hook prints the command, its output and its exit code to the worker's log on every
-`stop_profile`. Rollout replicas run it from their own server actor once the engine has flushed,
-with `VERL_PROFILE_SAVE_PATH` set to that replica's `agent_loop_rollout_replica_<n>` directory.
+`stop_profile`. Rollout replicas run it from their own server actor once the engine has flushed.
 See [Nsight Systems profiling](nsight_profiling.md) for the full description of the hook,
 including how to choose which ranks run it.
 

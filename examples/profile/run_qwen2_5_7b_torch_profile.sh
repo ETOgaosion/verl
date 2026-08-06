@@ -3,14 +3,18 @@
 #
 # Captures PyTorch profiler chrome traces of BOTH the training side and the vLLM
 # rollout engine (inference). Traces (.json.gz) are written under
-# global_profiler.save_path and can be opened in chrome://tracing or Perfetto:
-#   <save_path>/                              -> training traces
-#   <save_path>/agent_loop_rollout_replica_* -> rollout (inference) traces
+# global_profiler.save_path and can be opened in chrome://tracing or Perfetto. The
+# training traces land there directly; the rollout ones are moved there from the
+# engine's own directory by relocate_results (see PROFILE_RELOCATE below), so a
+# single command over save_path covers both.
 #
 # Training is collected continuously (discrete=False), so one file per profiled step
 # per rank holds the whole step as that worker ran it: compute_log_prob (old log
 # probs), compute_ref_log_prob and update_actor are record_function rows named after
 # their stage, with the update loop's mini_batch<i> rows nested under update_actor.
+# To keep that file small when the update loop has many mini-batches, set
+# PROFILE_SCHED_ACTIVE=N to keep only the first N update mini-batches (every other
+# stage stays in full); see the schedule vars below.
 #
 # Inference (rollout) is profiled by vLLM's own engine-side torch profiler, which
 # ONLY runs in "discrete" mode. It is therefore forced to discrete=True for the
@@ -32,6 +36,31 @@ profile_ranks=${PROFILE_RANKS:-"[0]"}
 profile_ranks_all=${PROFILE_RANKS_ALL:-False}
 profile_discrete=${PROFILE_DISCRETE:-False}
 profile_contents=${PROFILE_CONTENTS:-"['cpu','cuda']"}
+
+# Optional torch.profiler.schedule over the update loop's mini-batches (the log-prob and rollout
+# stages are always kept in full). Enabled only when active > 0. active <= 0 (the default) records
+# the whole update loop.
+#   discrete=False -> only `active` is honored: every stage in full + the first `active` update
+#                     mini-batches. skip_first/wait/warmup/repeat are ignored (dropping the leading
+#                     mini-batches would also drop the log-prob stages that ran before them).
+#   discrete=True  -> the full schedule applies to the update stage's own trace: skip_first/wait/
+#                     warmup drop leading mini-batches and only the `active` window is kept.
+profile_sched_active=${PROFILE_SCHED_ACTIVE:-0}
+profile_sched_skip_first=${PROFILE_SCHED_SKIP_FIRST:-0}
+profile_sched_wait=${PROFILE_SCHED_WAIT:-0}
+profile_sched_warmup=${PROFILE_SCHED_WARMUP:-0}
+profile_sched_repeat=${PROFILE_SCHED_REPEAT:-0}
+
+# The vLLM engine is given an output directory rather than a file name, so each replica writes
+# into <save_path>/agent_loop_rollout_replica_<n>/. Relocation moves those traces up into
+# save_path when the step's profiling finishes, renamed rollout-replica<n>_..., which keeps every
+# trace of a step in one directory -- what post-processing that does not walk sub-directories
+# needs. Set PROFILE_RELOCATE=False to keep the engine's own layout.
+profile_relocate=${PROFILE_RELOCATE:-True}
+
+# Optional command run on each profiled rank when a step's profiling finishes, e.g. to upload the
+# traces (they are node-local otherwise). It runs against save_path, so name that same path here.
+profile_finish_hook_cmd=${PROFILE_FINISH_HOOK_CMD:-null}
 
 # Inference (rollout) profiling. The vLLM engine profiler runs in discrete mode only and
 # traces the whole generate_sequences window on each profiled step. `ranks` here are
@@ -99,6 +128,12 @@ ACTOR=(
     actor_rollout_ref.actor.profiler.all_ranks=${profile_ranks_all}
     actor_rollout_ref.actor.profiler.tool_config.torch.discrete=${profile_discrete}
     actor_rollout_ref.actor.profiler.tool_config.torch.contents=${profile_contents}
+    # Sub-sample the update loop's mini-batches (active<=0 records them all).
+    actor_rollout_ref.actor.profiler.tool_config.torch.schedule.active=${profile_sched_active}
+    actor_rollout_ref.actor.profiler.tool_config.torch.schedule.skip_first=${profile_sched_skip_first}
+    actor_rollout_ref.actor.profiler.tool_config.torch.schedule.wait=${profile_sched_wait}
+    actor_rollout_ref.actor.profiler.tool_config.torch.schedule.warmup=${profile_sched_warmup}
+    actor_rollout_ref.actor.profiler.tool_config.torch.schedule.repeat=${profile_sched_repeat}
 )
 
 ROLLOUT=(
@@ -143,6 +178,9 @@ EXTRA=(
     global_profiler.tool=torch
     global_profiler.steps=${profile_steps}
     global_profiler.save_path=${profile_save_path}
+    # Inherited by every role, rollout replicas included.
+    global_profiler.relocate_results=${profile_relocate}
+    global_profiler.finish_hook_cmd="${profile_finish_hook_cmd}"
 )
 
 ########################### launch ###########################

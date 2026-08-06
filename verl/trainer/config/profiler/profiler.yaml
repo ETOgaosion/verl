@@ -18,9 +18,10 @@ ranks: []
 save_path: "outputs/profile"
 
 # When profiling finishes, move backend artifacts written to a framework-fixed location into
-# save_path. Currently only affects the nsys tool: Ray hardcodes the Nsight output directory
-# (/tmp/ray/session_latest/logs/nsight) and it cannot be changed, so enabling this relocates the
-# per-process *.nsys-rep files into save_path. Runs on the profiled ranks.
+# save_path. Two backends write outside the flat layout: nsys, because Ray hardcodes the Nsight
+# output directory (/tmp/ray/session_latest/logs/nsight), and the rollout engines, which only
+# accept a directory and so write into a per-replica sub-directory. Enabling this pulls both into
+# save_path itself. Runs on the profiled ranks.
 relocate_results: False
 
 # Shell command executed on the selected ranks when profiling finishes (after relocate_results).
@@ -94,6 +95,33 @@ tool_config:
     # Stop collecting profiler data at this response-token index (exclusive).
     # null means collect until the end (full collection).
     profile_token_end: null
+
+    # Optional torch.profiler.schedule over the update loop's mini-batches. Enabled only when
+    # active > 0, in which case profiler.step() (advanced once per update mini-batch) walks it.
+    # discrete: true  -> the update stage gets its own scheduled trace; skip_first/wait/warmup
+    #                    drop leading mini-batches and only the active window is kept. Log-prob
+    #                    and rollout stages get their own full traces.
+    # discrete: false -> one continuous trace per process keeps every stage in full plus the
+    #                    first `active` update mini-batches; skip_first/wait/warmup/repeat are
+    #                    ignored (dropping leading mini-batches would also drop the earlier stages).
+    schedule:
+      # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+      _target_: verl.utils.profiler.config.TorchProfilerScheduleConfig
+
+      # Mini-batches to skip before the first cycle (discrete only)
+      skip_first: 0
+
+      # Idle mini-batches (no collection) at the start of each cycle (discrete only)
+      wait: 0
+
+      # Warmup mini-batches (tracing on, data discarded) each cycle (discrete only)
+      warmup: 0
+
+      # Mini-batches to record each cycle; <= 0 disables scheduling (record the whole update loop)
+      active: 0
+
+      # Number of cycles to repeat; 0 repeats until profiling stops (discrete only)
+      repeat: 0
 
     name: torch
 

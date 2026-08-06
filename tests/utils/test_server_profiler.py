@@ -25,6 +25,7 @@ from verl.utils.profiler.config import (
     TorchProfilerToolConfig,
     build_sglang_profiler_args,
     build_vllm_profiler_args,
+    relocate_rollout_traces,
     rollout_trace_dir,
 )
 from verl.utils.profiler.profile import DistProfiler
@@ -124,6 +125,56 @@ class TestServerProfilerArgs(unittest.TestCase):
         self.assertEqual(args["num_steps"], 9)
 
 
+class TestRolloutTraceRelocation(unittest.TestCase):
+    """Engines write into a sub-directory; relocation brings the traces to the configured path."""
+
+    def _config(self, save_path: str, **kwargs) -> ProfilerConfig:
+        return ProfilerConfig(
+            tool="torch",
+            enable=True,
+            ranks=[0],
+            save_path=save_path,
+            tool_config=TorchProfilerToolConfig(contents=["cpu"], discrete=True),
+            **kwargs,
+        )
+
+    def _write_engine_traces(self, config: ProfilerConfig, rank: int, *names: str) -> str:
+        src_dir = rollout_trace_dir(config, rank)
+        os.makedirs(src_dir, exist_ok=True)
+        for name in names:
+            with open(os.path.join(src_dir, name), "w") as f:
+                f.write(name)
+        return src_dir
+
+    def test_traces_end_up_next_to_the_training_ones(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            src_dir = self._write_engine_traces(config, 2, "host_123.pt.trace.json.gz")
+
+            relocated = relocate_rollout_traces(config, rank=2)
+
+            expected = os.path.join(save_path, "rollout-replica2_host_123.pt.trace.json.gz")
+            self.assertEqual(relocated, [expected])
+            # The replica is in the name now that it is no longer in the path.
+            self.assertTrue(os.path.exists(expected))
+            self.assertEqual(os.listdir(src_dir), [])
+
+    def test_traces_stay_where_the_engine_wrote_them_by_default(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path)
+            src_dir = self._write_engine_traces(config, 0, "host_123.pt.trace.json.gz")
+
+            self.assertEqual(relocate_rollout_traces(config, rank=0), [])
+
+            self.assertEqual(os.listdir(src_dir), ["host_123.pt.trace.json.gz"])
+
+    def test_an_engine_that_wrote_nothing_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+
+            self.assertEqual(relocate_rollout_traces(config, rank=1), [])
+
+
 class TestRolloutFinishHook(unittest.TestCase):
     """The rollout finish hook is what moves engine traces off the node they were written on."""
 
@@ -156,17 +207,6 @@ class TestRolloutFinishHook(unittest.TestCase):
 
             with open(out) as f:
                 self.assertEqual(f.read().strip(), save_path)
-
-    def test_run_finish_hook_reports_the_engine_trace_dir(self):
-        with tempfile.TemporaryDirectory() as save_path:
-            out = os.path.join(save_path, "env")
-            replica_dir = os.path.join(save_path, "agent_loop_rollout_replica_2")
-            profiler = DistProfiler(rank=0, config=self._config(save_path, f'echo "$VERL_PROFILE_SAVE_PATH" > {out}'))
-
-            profiler.run_finish_hook(save_path=replica_dir)
-
-            with open(out) as f:
-                self.assertEqual(f.read().strip(), replica_dir)
 
     def test_run_finish_hook_skips_unselected_ranks(self):
         with tempfile.TemporaryDirectory() as save_path:
@@ -210,12 +250,15 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         mock_engine.start_profile.assert_called_once()
 
         # Test stop_profile
-        await vLLMHttpServer.stop_profile(mock_self)
+        with patch("verl.workers.rollout.vllm_rollout.vllm_async_server.relocate_rollout_traces") as mock_relocate:
+            await vLLMHttpServer.stop_profile(mock_self)
         mock_engine.stop_profile.assert_called_once()
+        # Relocation runs once the engine has flushed, so the hook sees the relocated traces.
+        mock_relocate.assert_called_once_with(mock_profiler.config, mock_self.replica_rank)
         # The engine bypasses DistProfiler.stop(), so the server must fire the finish hook itself,
-        # otherwise rollout traces are never uploaded. It reports the replica sub-directory it
-        # actually wrote to, not the shared parent.
-        mock_profiler.run_finish_hook.assert_called_once_with(save_path="/tmp/test/agent_loop_rollout_replica_3")
+        # otherwise rollout traces are never uploaded. The hook reports the configured save_path,
+        # like every other rank, so a command written for that path covers the rollout too.
+        mock_profiler.run_finish_hook.assert_called_once_with()
 
     async def test_vllm_stop_profile_skips_finish_hook_when_not_profiled(self):
         try:
@@ -304,7 +347,7 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
             # Test stop_profile
             await SGLangHttpServer.stop_profile(mock_self)
             mock_tokenizer_manager.stop_profile.assert_called_once()
-            mock_profiler.run_finish_hook.assert_called_once_with(save_path="/tmp/test/agent_loop_rollout_replica_0")
+            mock_profiler.run_finish_hook.assert_called_once_with()
 
 
 if __name__ == "__main__":

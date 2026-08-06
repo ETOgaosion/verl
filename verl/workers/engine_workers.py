@@ -307,11 +307,15 @@ class TrainingWorker(Worker, DistProfilerExtension):
                     update_lr_scheduler=batch_idx == total_num_iterations - 1,
                     disable_auto_offload=True,
                 )
-                # Name the mini-batch in the trace: the profiler collects the whole training
-                # step, so mini-batches are rows inside it rather than steps of their own, and
-                # without the index every iteration of this loop looks alike.
+                # Name the mini-batch in the trace so each iteration of this otherwise identical
+                # loop is distinguishable when the whole step is recorded (continuous mode).
                 with torch.profiler.record_function(f"mini_batch{batch_idx}"):
                     actor_output = self.train_batch(mini_batch_td)
+                # Advance the profiler once per mini-batch. This drives any
+                # torch.profiler.schedule (the schedule's unit is one update mini-batch) and,
+                # with no schedule, only labels torch's ProfilerStep#<n> boundary. start()/stop()
+                # happen on the outer worker, but the profiler is process-global so this reaches it.
+                self.profiler.step()
                 output_lst.append(actor_output)
 
             if self.engine.is_mp_src_rank_with_outputs():
@@ -701,7 +705,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         return output.cpu() if output is not None else None
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
-    @DistProfiler.annotate(color="red", role="actor_update")
+    # scheduled=True: this stage iterates over update mini-batches, so in discrete mode its trace
+    # is the one a torch.profiler.schedule sub-samples (other stages stay full).
+    @DistProfiler.annotate(color="red", role="actor_update", scheduled=True)
     @_with_routing_replay_flag(enabled=True)
     def update_actor(self, data: TensorDict) -> TensorDict:
         output = self.actor.train_mini_batch(data=data)

@@ -45,7 +45,7 @@ Some users may think it is not convenient, but it is understandable that Ray may
 
 Because Ray hardcodes the Nsight output directory, verl provides a *finish hook* that runs when profiling stops (i.e. on every profiled step's `stop_profile`). It has two independent parts, configurable either once under `global_profiler` (every role inherits it) or per role under `profiler` (which overrides the global value):
 
-* **`relocate_results`** (bool, default `False`). When `True`, each profiled worker moves *its own* `worker_process_<pid>.*` reports out of `/tmp/ray/session_latest/logs/nsight/` into `save_path`. Matching is by PID (nsys's `%p` token equals the worker process PID), so co-located ranks never touch each other's files and there is no race. Destination filenames are prefixed with the role and hostname (e.g. `actor_<host>_worker_process_<pid>.nsys-rep`) to stay unique across nodes. The move is best-effort: nsys only finalizes a report after the capture session shuts down, so files that are not present yet are simply skipped and nothing is ever deleted.
+* **`relocate_results`** (bool, default `False`). When `True`, each profiled worker moves *its own* `worker_process_<pid>.*` reports out of `/tmp/ray/session_latest/logs/nsight/` into `save_path`. Matching is by PID (nsys's `%p` token equals the worker process PID), so co-located ranks never touch each other's files and there is no race. Destination filenames are prefixed with the role and hostname (e.g. `actor_<host>_worker_process_<pid>.nsys-rep`) to stay unique across nodes. The move is best-effort: nsys only finalizes a report after the capture session shuts down, so files that are not present yet are simply skipped and nothing is ever deleted. The same flag also flattens rollout engine traces, which the engines write into `<save_path>/agent_loop_rollout_replica_<n>/`, into `save_path` — see [PyTorch profiling](torch_profiling.md).
 * **`finish_hook_cmd`** (str, default `null`). A shell command executed on the selected ranks after `relocate_results`. Use it for post-processing, compression, or uploading traces to remote storage. It runs with these extra environment variables:
   * `VERL_PROFILE_SAVE_PATH` — the configured `save_path`.
   * `VERL_PROFILE_TOOL` — the profiler tool (e.g. `nsys`).
@@ -74,11 +74,13 @@ Example: move every rank's reports into `save_path` and then upload them to HDFS
                 all_ranks: True
 ```
 
-On the command line the value needs two levels of quoting: single quotes so your shell does not expand `$VERL_PROFILE_SAVE_PATH` before the worker sees it, and double quotes *inside* them wrapping the whole command, because Hydra's override parser rejects an unquoted value containing `$` or `"`:
+The environment variables are a convenience, not a requirement: the hook always runs against the `save_path` you configured, so a command that already knows that path can name it directly. When you do reference a variable on the command line, wrap the value in single quotes so your shell does not expand it before the worker sees it:
 
 ```bash
-    global_profiler.finish_hook_cmd='"hdfs dfs -put -f $VERL_PROFILE_SAVE_PATH/*.nsys-rep hdfs:///my/profiles/"'
+    global_profiler.finish_hook_cmd='hdfs dfs -put -f $VERL_PROFILE_SAVE_PATH/*.nsys-rep hdfs:///my/profiles/'
 ```
+
+The value itself must not contain quotes — Hydra's override parser rejects `'hdfs dfs -put -f "$VERL_PROFILE_SAVE_PATH"/*.nsys-rep hdfs:///my/profiles/'`, so a command that needs quoting (paths with spaces) belongs in a small script that the hook calls.
 
 **Observing the hook.** Every `stop_profile` prints a `[Profiler][finish_hook]` line to the worker's stdout stating whether a command is configured and whether the current rank was selected, followed by the command line itself, its merged stdout/stderr streamed live, and its exit code. These are plain prints rather than logger calls so they show up in the Ray worker logs regardless of the logging level. The command failing (non-zero exit or launch error) never interrupts training.
 

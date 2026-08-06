@@ -14,6 +14,7 @@
 
 import json
 import os
+import shutil
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -36,14 +37,66 @@ class NsightToolConfig(BaseConfig):
 
 
 @dataclass
+class TorchProfilerScheduleConfig(BaseConfig):
+    """Schedule for ``torch.profiler.schedule``, applied at the granularity of update
+    mini-batches (``profiler.step()`` is advanced once per mini-batch of the actor/critic
+    update loop, never on the whole-batch stages like the log-prob forwards or rollout).
+
+    The profiler cycles through ``skip_first`` -> (``wait`` -> ``warmup`` -> ``active``) x
+    ``repeat``. Scheduling is only enabled when ``active > 0``; otherwise the update loop is
+    recorded in full.
+
+    How it interacts with ``discrete`` matters:
+
+    * ``discrete: True`` -- the update stage is profiled in its own trace, so the full schedule
+      applies to its mini-batches: ``skip_first``/``wait``/``warmup`` drop the leading ones and
+      only the ``active`` window is kept. The other stages (log-prob, rollout, ref) each get
+      their own full trace, untouched by the schedule.
+    * ``discrete: False`` -- everything the worker runs in the step shares one continuous trace.
+      The log-prob/rollout stages run before the first mini-batch, and torch can only persist a
+      recorded window that ends in ``RECORD_AND_SAVE``, so dropping the leading mini-batches would
+      also discard those earlier stages. Only ``active`` is honored here: the trace keeps every
+      other stage in full plus the first ``active`` update mini-batches; ``skip_first``/``wait``/
+      ``warmup``/``repeat`` are ignored. Use ``discrete: True`` when you need those.
+    """
+
+    # Number of steps to skip at the very beginning (not counted in the cycle). discrete only.
+    skip_first: int = 0
+    # Number of steps to idle (no collection) at the start of each cycle. discrete only.
+    wait: int = 0
+    # Number of steps to warm up (tracing on, data discarded) each cycle. discrete only.
+    warmup: int = 0
+    # Number of mini-batches to actively record each cycle. <= 0 disables scheduling (record all).
+    active: int = 0
+    # Number of cycles to repeat. 0 means repeat until profiling stops. discrete only.
+    repeat: int = 0
+    name: str = "torch_schedule"
+
+    def __post_init__(self) -> None:
+        """config validation logics go here"""
+        for field_name in ("skip_first", "wait", "warmup", "active", "repeat"):
+            value = getattr(self, field_name)
+            assert isinstance(value, int), f"{field_name} must be int, got {type(value)}"
+            assert value >= 0, f"{field_name} must be >= 0, got {value}"
+
+    @property
+    def enabled(self) -> bool:
+        """Scheduling only takes effect when at least one active mini-batch is requested."""
+        return self.active > 0
+
+
+@dataclass
 class TorchProfilerToolConfig(BaseConfig):
     """Torch profiler tool config.
 
-    A profiled step is collected whole: ``global_profiler.steps`` picks which RL steps to
-    collect, and everything the worker runs in such a step lands in one trace, with each
-    stage and each update mini-batch annotated inside it. There is no sub-step sampling
-    knob (torch's ``schedule``), because its unit -- one ``profiler.step()`` -- is the RL
-    step here, and RL steps are already selected by ``global_profiler.steps``.
+    By default a profiled step is collected whole: ``global_profiler.steps`` picks which RL
+    steps to collect, and everything the worker runs in such a step lands in one trace, with
+    each stage and each update mini-batch annotated inside it.
+
+    ``schedule`` optionally sub-samples the update loop's mini-batches, so a step with many
+    identical mini-batches does not bloat the trace. It is scoped to the update loop only --
+    the log-prob and rollout stages are always kept in full -- and its exact effect depends on
+    ``discrete`` (see :class:`TorchProfilerScheduleConfig`).
     """
 
     # options: cuda, cpu, memory, shapes, stack. Empty means collect everything.
@@ -57,6 +110,9 @@ class TorchProfilerToolConfig(BaseConfig):
     # Stop collecting profiler data at this response-token index (exclusive).
     # None means collect until the end.
     profile_token_end: Optional[int] = None
+    # Optional torch.profiler.schedule over update mini-batches (see the class docstring above).
+    # When active > 0, DistProfiler.step() advances it once per mini-batch.
+    schedule: Optional[TorchProfilerScheduleConfig] = None
     name: str = "torch"
 
     def __post_init__(self) -> None:
@@ -184,14 +240,17 @@ class ProfilerConfig(BaseConfig):
         all_ranks (bool): Whether to profile all ranks.
         ranks (list[int]): The ranks that will be profiled. Defaults to [].
         global_tool_config (Any): Global tool configuration for all profiling tools.
-        relocate_results (bool): When profiling finishes, move backend artifacts that the framework writes
-          to a fixed location into ``save_path``. Currently only affects the ``nsys`` tool, whose reports Ray
-          hardcodes under ``/tmp/ray/session_latest/logs/nsight`` (the directory is not configurable, see
-          https://docs.ray.io/en/latest/ray-observability/user-guides/profiling.html). Runs on the profiled ranks.
+        relocate_results (bool): When profiling finishes, move backend artifacts that a framework writes
+          outside the flat layout into ``save_path``: ``nsys`` reports, which Ray hardcodes under
+          ``/tmp/ray/session_latest/logs/nsight`` (the directory is not configurable, see
+          https://docs.ray.io/en/latest/ray-observability/user-guides/profiling.html), and rollout engine
+          traces, which land in a per-replica sub-directory (see :func:`relocate_rollout_traces`). Runs on
+          the profiled ranks.
         finish_hook_cmd (Optional[str]): Shell command executed on the selected ranks when profiling finishes
           (after the backend profiler's ``stop()`` and after ``relocate_results``). Useful for post-processing
-          or uploading traces. The command runs with these extra environment variables: ``VERL_PROFILE_SAVE_PATH``,
-          ``VERL_PROFILE_TOOL``, ``VERL_PROFILE_RANK``, ``VERL_PROFILE_PID``, ``VERL_PROFILE_ROLE`` (if known) and
+          or uploading traces. It is told about the run through these extra environment variables, all optional
+          to use: ``VERL_PROFILE_SAVE_PATH`` (the configured ``save_path``), ``VERL_PROFILE_TOOL``,
+          ``VERL_PROFILE_RANK``, ``VERL_PROFILE_PID``, ``VERL_PROFILE_ROLE`` (if known) and
           ``VERL_PROFILE_RAY_NSIGHT_DIR`` (nsys only).
         finish_hook_all_ranks (bool): Run ``finish_hook_cmd`` on every rank.
         finish_hook_ranks (list[int]): Ranks that run ``finish_hook_cmd``. Ignored when ``finish_hook_all_ranks``
@@ -265,6 +324,38 @@ def rollout_trace_dir(profiler_config: ProfilerConfig, rank: int) -> str:
     ``save_path`` instead of writing into the flat layout the training workers use.
     """
     return os.path.join(profiler_config.save_path, f"agent_loop_rollout_replica_{rank}")
+
+
+def relocate_rollout_traces(profiler_config: ProfilerConfig, rank: int) -> list[str]:
+    """Move the engine traces of replica ``rank`` up into ``save_path``. No-op unless
+    ``relocate_results`` is set.
+
+    The engines only take a directory, so replicas write into sub-directories of ``save_path``
+    (see :func:`rollout_trace_dir`) and post-processing that does not walk sub-directories never
+    sees them. Relocating puts a step's rollout traces in the same directory as its training
+    traces, which is the one directory the run configured. The replica moves into the file name,
+    since it is no longer in the path.
+
+    Anything an engine flushes after this stays in the sub-directory, so late writes are kept
+    rather than lost. Returns the new paths; files that cannot be moved are reported and skipped.
+    """
+    if not getattr(profiler_config, "relocate_results", False):
+        return []
+
+    src_dir = rollout_trace_dir(profiler_config, rank)
+    if not os.path.isdir(src_dir):
+        return []
+
+    relocated = []
+    for name in sorted(os.listdir(src_dir)):
+        dst = os.path.join(profiler_config.save_path, f"rollout-replica{rank}_{name}")
+        try:
+            shutil.move(os.path.join(src_dir, name), dst)
+        except Exception as e:
+            print(f"[Profiler] rank {rank}: relocating rollout trace {name} failed: {e}", flush=True)
+            continue
+        relocated.append(dst)
+    return relocated
 
 
 def build_vllm_profiler_args(

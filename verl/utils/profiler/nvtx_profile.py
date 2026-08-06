@@ -218,10 +218,11 @@ class NsightSystemsProfiler(DistProfiler):
         return moved
 
     def step(self):
-        """No-op training-step boundary hook.
+        """No-op per-mini-batch hook.
 
-        Nsight Systems profiling is controlled via start/stop, so there is no step boundary to
-        mark inside a collection. It must still be defined here: without it, the dispatcher's
+        The actor update loop calls this once per mini-batch to drive the torch profiler's
+        schedule, but Nsight Systems profiling is controlled via start/stop, so it has nothing to
+        advance here. It must still be defined here: without it, the dispatcher's
         ``getattr(self._impl, "step", lambda: None)`` resolves to the inherited
         ``DistProfiler.step`` (backend impls subclass ``DistProfiler`` but never run its
         ``__init__``), which then reads dispatcher-only state such as ``_enable`` and raises

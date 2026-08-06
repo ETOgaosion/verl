@@ -41,7 +41,7 @@ from verl.plugin.platform import get_platform
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.device import get_resource_name, get_visible_devices_keyword, is_torch_npu_available
 from verl.utils.net_utils import get_free_port, is_valid_ipv6_address
-from verl.utils.profiler import DistProfiler, build_vllm_profiler_args, rollout_trace_dir
+from verl.utils.profiler import DistProfiler, build_vllm_profiler_args, relocate_rollout_traces
 from verl.utils.tokenizer import normalize_token_ids
 from verl.utils.tracking import RLInsightLogger
 from verl.utils.vllm.vllm_quant_utils import apply_vllm_quant_patches
@@ -851,12 +851,11 @@ class vLLMHttpServer:
             return
         if self._should_profile():
             await self.engine.stop_profile()
+            relocate_rollout_traces(self.profiler_controller.config, self.replica_rank)
             # The engine writes traces directly, bypassing DistProfiler.stop(), so the finish
             # hook has to be triggered here. Running it from this actor also keeps it on the
             # node that holds the trace files.
-            self.profiler_controller.run_finish_hook(
-                save_path=rollout_trace_dir(self.profiler_controller.config, self.replica_rank)
-            )
+            self.profiler_controller.run_finish_hook()
 
     async def set_global_steps(self, global_steps: int):
         """Set the global steps of the model weights."""

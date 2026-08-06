@@ -1306,15 +1306,6 @@ class PPOTrainer(ABC):
             # profiled across the whole step rather than around a single generation call.
             for manager in self._rollout_server_managers():
                 manager.start_profile()
-        elif self.curr_step_profile:
-            # profile_continuous_steps keeps one collection open across this run of steps, so
-            # nothing is started here. Close the previous step's window instead, to keep one
-            # profiler step per RL step in a trace that holds several.
-            self.actor_rollout_wg.step_profile()
-            if self.use_reference_policy:
-                self.ref_policy_wg.step_profile()
-            if self.use_critic:
-                self.critic_wg.step_profile()
 
     def _stop_profiling(self) -> None:
         """Stop profiling for all worker groups if profiling is enabled."""
