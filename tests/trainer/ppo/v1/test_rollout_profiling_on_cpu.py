@@ -85,6 +85,44 @@ def test_continuous_steps_leave_the_open_collection_running():
     manager.start_profile.assert_not_called()
 
 
+def test_shared_worker_group_is_profiled_once():
+    # In the hybrid engine ref_policy_wg (and sometimes critic_wg) is the *same* worker group
+    # object as actor_rollout_wg. Each start/stop_profile round-trips to every rank and, on stop,
+    # runs the finish hook (e.g. the user's trace-upload command). If profiling drove the shared
+    # workers once per role alias, that hook -- and any upload it triggers -- would fire multiple
+    # times and duplicate every trace file. It must fire exactly once per distinct process.
+    manager = MagicMock()
+    trainer = _trainer(_StubTrainer, llm_server_manager=manager)
+    trainer.use_reference_policy = True
+    trainer.use_critic = True
+    trainer.ref_policy_wg = trainer.actor_rollout_wg
+    trainer.critic_wg = trainer.actor_rollout_wg
+
+    trainer._start_profiling()
+    trainer._stop_profiling()
+
+    trainer.actor_rollout_wg.start_profile.assert_called_once()
+    trainer.actor_rollout_wg.stop_profile.assert_called_once()
+
+
+def test_distinct_worker_groups_are_each_profiled_once():
+    # When the reference/critic run in their own worker groups they must still be driven -- the
+    # dedup only skips *aliases* of actor_rollout_wg, never genuinely separate processes.
+    manager = MagicMock()
+    trainer = _trainer(_StubTrainer, llm_server_manager=manager)
+    trainer.use_reference_policy = True
+    trainer.use_critic = True
+    trainer.ref_policy_wg = MagicMock()
+    trainer.critic_wg = MagicMock()
+
+    trainer._start_profiling()
+    trainer._stop_profiling()
+
+    for wg in (trainer.actor_rollout_wg, trainer.ref_policy_wg, trainer.critic_wg):
+        wg.start_profile.assert_called_once()
+        wg.stop_profile.assert_called_once()
+
+
 def test_separate_async_also_profiles_standalone_replicas():
     hybrid, standalone = MagicMock(), MagicMock()
     trainer = _trainer(

@@ -304,6 +304,25 @@ class TestTorchProfile(unittest.TestCase):
         _, kwargs = mock_profile.call_args
         self.assertIn("schedule", kwargs)
 
+    @patch("torch.profiler.schedule")
+    @patch("torch.profiler.profile")
+    def test_schedule_suppresses_profiler_step_rows(self, mock_profile, mock_schedule):
+        # A schedule sub-samples mini-batches, but verl advances step() per mini-batch (not per RL
+        # step), so torch's "ProfilerStep#<n>" rows are turned off via record_steps=False.
+        sched = {"skip_first": 0, "wait": 0, "warmup": 0, "active": 2, "repeat": 1}
+        prof = get_torch_profiler(contents=["cpu"], save_path="/tmp/test", rank=0, schedule=sched)
+
+        self.assertIs(prof.record_steps, False)
+
+    @patch("torch.profiler.schedule")
+    @patch("torch.profiler.profile")
+    def test_no_schedule_leaves_record_steps_untouched(self, mock_profile, mock_schedule):
+        # Without a schedule there are no step boundaries to label, so record_steps is left alone
+        # (torch already defaults it to False).
+        prof = get_torch_profiler(contents=["cpu"], save_path="/tmp/test", rank=0)
+
+        self.assertIsNot(prof.record_steps, False)
+
     def test_continuous_schedule_keeps_only_active(self):
         # In continuous mode the trace also holds the stages that run before the update loop, so the
         # schedule must not skip/wait/warmup (that would drop them); only `active` is honored.

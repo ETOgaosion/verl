@@ -104,6 +104,8 @@ tool_config:
     # discrete: false -> one continuous trace per process keeps every stage in full plus the
     #                    first `active` update mini-batches; skip_first/wait/warmup/repeat are
     #                    ignored (dropping leading mini-batches would also drop the earlier stages).
+    # Either mode: no "ProfilerStep#<n>" rows are written (a step() here is a mini-batch, not an RL
+    # step); the sub-sampling still happens, only the boundary labels are suppressed.
     schedule:
       # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
       _target_: verl.utils.profiler.config.TorchProfilerScheduleConfig

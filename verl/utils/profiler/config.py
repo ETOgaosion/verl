@@ -58,6 +58,10 @@ class TorchProfilerScheduleConfig(BaseConfig):
       also discard those earlier stages. Only ``active`` is honored here: the trace keeps every
       other stage in full plus the first ``active`` update mini-batches; ``skip_first``/``wait``/
       ``warmup``/``repeat`` are ignored. Use ``discrete: True`` when you need those.
+
+    Either way the schedule never writes torch's ``ProfilerStep#<n>`` rows: verl advances the
+    profiler once per mini-batch (not per RL step), so those rows would tag mini-batch boundaries
+    and only add noise. The sub-sampling still happens; the boundary labels are just turned off.
     """
 
     # Number of steps to skip at the very beginning (not counted in the cycle). discrete only.

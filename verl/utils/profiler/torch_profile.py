@@ -212,7 +212,18 @@ def get_torch_profiler(
     if schedule:
         profile_kwargs["schedule"] = torch.profiler.schedule(**schedule)
 
-    return torch.profiler.profile(**profile_kwargs)
+    prof = torch.profiler.profile(**profile_kwargs)
+
+    if schedule:
+        # A schedule makes torch label every prof.step() boundary with a
+        # "ProfilerStep#<n>" record_function row. In verl a step() is just one
+        # update mini-batch (see TrainingWorker.train_mini_batch), so those rows
+        # tag mini-batch boundaries rather than any meaningful RL step and only
+        # add noise to the trace. Turn the labelling off: prof.step() still walks
+        # the schedule and saves the active window, it just stops emitting the rows.
+        prof.record_steps = False
+
+    return prof
 
 
 class Profiler(DistProfiler):
@@ -335,9 +346,11 @@ class Profiler(DistProfiler):
         """Advance the process-global active profiler by one update mini-batch.
 
         The actor/critic update loop calls this once per mini-batch. When a
-        ``torch.profiler.schedule`` is configured it walks the wait/warmup/active state machine;
-        without one it only labels torch's ``ProfilerStep#<n>`` boundary. The log-prob and
-        rollout stages never call step(), so they are never sub-sampled.
+        ``torch.profiler.schedule`` is configured it walks the wait/warmup/active state machine
+        (and saves the active window); without one it does nothing meaningful. Either way no
+        ``ProfilerStep#<n>`` row is written -- get_torch_profiler turns that labelling off, since
+        a step() here is a mini-batch, not a meaningful RL step. The log-prob and rollout stages
+        never call step(), so they are never sub-sampled.
 
         No-op when no torch profiler is currently running.
         """

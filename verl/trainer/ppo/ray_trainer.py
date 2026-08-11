@@ -1118,24 +1118,40 @@ class RayPPOTrainer:
 
     def _start_profiling(self, do_profile: bool) -> None:
         """Start profiling for all worker groups if profiling is enabled."""
-        if do_profile:
-            # "train", not "e2e": this window only holds what the training worker itself runs
-            # (log-prob forwards and the actor update). Generation happens in the rollout
-            # engines, which are profiled separately and write their own traces.
-            self.actor_rollout_wg.start_profile(role="train", profile_step=self.global_steps)
-            if self.use_reference_policy:
-                self.ref_policy_wg.start_profile(profile_step=self.global_steps)
-            if self.use_critic:
-                self.critic_wg.start_profile(profile_step=self.global_steps)
+        if not do_profile:
+            return
+        # In the hybrid engine, actor/rollout and the (colocated) reference -- and sometimes the
+        # critic -- are the SAME worker group object, so ref_policy_wg / critic_wg can alias
+        # actor_rollout_wg. Each start_profile/stop_profile round-trips to every rank and, on stop,
+        # runs the finish hook (e.g. the user's trace-upload command). Driving the same physical
+        # workers more than once would fire that hook once per alias and upload the very same trace
+        # file multiple times. Drive each distinct worker group exactly once.
+        # "train", not "e2e": this window only holds what the training worker itself runs
+        # (log-prob forwards and the actor update). Generation happens in the rollout engines,
+        # which are profiled separately and write their own traces.
+        self.actor_rollout_wg.start_profile(role="train", profile_step=self.global_steps)
+        seen = {id(self.actor_rollout_wg)}
+        if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
+            seen.add(id(self.ref_policy_wg))
+            self.ref_policy_wg.start_profile(profile_step=self.global_steps)
+        if self.use_critic and id(self.critic_wg) not in seen:
+            seen.add(id(self.critic_wg))
+            self.critic_wg.start_profile(profile_step=self.global_steps)
 
     def _stop_profiling(self, do_profile: bool) -> None:
         """Stop profiling for all worker groups if profiling is enabled."""
-        if do_profile:
-            self.actor_rollout_wg.stop_profile()
-            if self.use_reference_policy:
-                self.ref_policy_wg.stop_profile()
-            if self.use_critic:
-                self.critic_wg.stop_profile()
+        if not do_profile:
+            return
+        # See _start_profiling: skip aliased worker groups so the finish hook (and any trace upload
+        # it triggers) fires exactly once per distinct process instead of once per role alias.
+        self.actor_rollout_wg.stop_profile()
+        seen = {id(self.actor_rollout_wg)}
+        if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
+            seen.add(id(self.ref_policy_wg))
+            self.ref_policy_wg.stop_profile()
+        if self.use_critic and id(self.critic_wg) not in seen:
+            seen.add(id(self.critic_wg))
+            self.critic_wg.stop_profile()
 
     def _get_dp_size(self, worker_group, role: str) -> int:
         """Get data parallel size from worker group dispatch info.

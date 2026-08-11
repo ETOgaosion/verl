@@ -1296,10 +1296,20 @@ class PPOTrainer(ABC):
             # "train", not "e2e": this window only holds what the training worker itself runs
             # (log-prob forwards and the actor update). Generation happens in the inference
             # engines below, which write their own traces.
+            #
+            # In the hybrid engine, actor/rollout and the (colocated) reference -- and sometimes the
+            # critic -- share ONE worker group object, so ref_policy_wg / critic_wg can alias
+            # actor_rollout_wg. Each start/stop_profile round-trips to every rank and, on stop, runs
+            # the finish hook (e.g. the user's trace-upload command); driving the same physical
+            # workers more than once would fire that hook once per alias and upload the same trace
+            # file multiple times. Drive each distinct worker group exactly once.
             self.actor_rollout_wg.start_profile(role="train", profile_step=self.global_steps)
-            if self.use_reference_policy:
+            seen = {id(self.actor_rollout_wg)}
+            if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
+                seen.add(id(self.ref_policy_wg))
                 self.ref_policy_wg.start_profile(profile_step=self.global_steps)
-            if self.use_critic:
+            if self.use_critic and id(self.critic_wg) not in seen:
+                seen.add(id(self.critic_wg))
                 self.critic_wg.start_profile(profile_step=self.global_steps)
             # Rollout generation is decoupled from the training step in V1 (prompts are served
             # asynchronously and consumed from the replay buffer), so the inference engines are
@@ -1323,10 +1333,15 @@ class PPOTrainer(ABC):
         self.curr_step_profile = self.next_step_profile
 
         if do_profile:
+            # See _start_profiling: skip aliased worker groups so the finish hook (and any trace
+            # upload it triggers) fires exactly once per distinct process, not once per role alias.
             self.actor_rollout_wg.stop_profile()
-            if self.use_reference_policy:
+            seen = {id(self.actor_rollout_wg)}
+            if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
+                seen.add(id(self.ref_policy_wg))
                 self.ref_policy_wg.stop_profile()
-            if self.use_critic:
+            if self.use_critic and id(self.critic_wg) not in seen:
+                seen.add(id(self.critic_wg))
                 self.critic_wg.stop_profile()
             for manager in self._rollout_server_managers():
                 manager.stop_profile()
