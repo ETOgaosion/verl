@@ -1319,6 +1319,7 @@ class PPOTrainer(ABC):
 
     def _stop_profiling(self) -> None:
         """Stop profiling for all worker groups if profiling is enabled."""
+        this_step_profile = self.curr_step_profile
         self.next_step_profile = (
             self.global_steps + 1 in self.config.global_profiler.steps
             if self.config.global_profiler.steps is not None
@@ -1333,16 +1334,25 @@ class PPOTrainer(ABC):
         self.curr_step_profile = self.next_step_profile
 
         if do_profile:
+            # Run the finish command (e.g. the trace upload) only once, on the last profiled step, so
+            # a command that uploads the whole save_path sends each trace once instead of re-uploading
+            # the accumulating directory every step. "Last" is the largest configured step, or the
+            # run's final step if it ends earlier on a profiled step.
+            profiled_steps = self.config.global_profiler.steps
+            is_last_step = self.global_steps >= self.total_training_steps
+            run_command = bool(
+                this_step_profile and profiled_steps and (self.global_steps == max(profiled_steps) or is_last_step)
+            )
             # See _start_profiling: skip aliased worker groups so the finish hook (and any trace
             # upload it triggers) fires exactly once per distinct process, not once per role alias.
-            self.actor_rollout_wg.stop_profile()
+            self.actor_rollout_wg.stop_profile(run_command=run_command)
             seen = {id(self.actor_rollout_wg)}
             if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
                 seen.add(id(self.ref_policy_wg))
-                self.ref_policy_wg.stop_profile()
+                self.ref_policy_wg.stop_profile(run_command=run_command)
             if self.use_critic and id(self.critic_wg) not in seen:
                 seen.add(id(self.critic_wg))
-                self.critic_wg.stop_profile()
+                self.critic_wg.stop_profile(run_command=run_command)
             for manager in self._rollout_server_managers():
                 manager.stop_profile()
 

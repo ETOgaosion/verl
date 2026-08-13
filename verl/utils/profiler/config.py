@@ -250,12 +250,15 @@ class ProfilerConfig(BaseConfig):
           https://docs.ray.io/en/latest/ray-observability/user-guides/profiling.html), and rollout engine
           traces, which land in a per-replica sub-directory (see :func:`relocate_rollout_traces`). Runs on
           the profiled ranks.
-        finish_hook_cmd (Optional[str]): Shell command executed on the selected ranks when profiling finishes
-          (after the backend profiler's ``stop()`` and after ``relocate_results``). Useful for post-processing
-          or uploading traces. It is told about the run through these extra environment variables, all optional
-          to use: ``VERL_PROFILE_SAVE_PATH`` (the configured ``save_path``), ``VERL_PROFILE_TOOL``,
-          ``VERL_PROFILE_RANK``, ``VERL_PROFILE_PID``, ``VERL_PROFILE_ROLE`` (if known) and
-          ``VERL_PROFILE_RAY_NSIGHT_DIR`` (nsys only).
+        finish_hook_cmd (Optional[str]): Shell command executed on the selected ranks **once**, after the last
+          profiled step (not once per step). Backend ``stop()`` and ``relocate_results`` still run every profiled
+          step, so traces accumulate in ``save_path``; this command then runs a single time to ship them off the
+          node, e.g. ``mlx asset upload "$VERL_PROFILE_SAVE_PATH"``. Because it runs once rather than per step,
+          uploading the whole ``save_path`` sends each trace exactly once (no re-uploading of the accumulating
+          directory). The run context is exported as ``VERL_PROFILE_SAVE_PATH`` (the configured ``save_path``),
+          ``VERL_PROFILE_TOOL``, ``VERL_PROFILE_RANK``, ``VERL_PROFILE_PID``, ``VERL_PROFILE_ROLE`` (if known) and
+          ``VERL_PROFILE_RAY_NSIGHT_DIR`` (nsys only). ``save_path`` is usually node-local, so the command runs on
+          every selected rank/node; pick ``finish_hook_ranks`` so one rank per node uploads that node's directory.
         finish_hook_all_ranks (bool): Run ``finish_hook_cmd`` on every rank.
         finish_hook_ranks (list[int]): Ranks that run ``finish_hook_cmd``. Ignored when ``finish_hook_all_ranks``
           is True. When both are unset the hook falls back to the profiled ranks (``all_ranks``/``ranks``).

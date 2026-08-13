@@ -24,17 +24,20 @@ save_path: "outputs/profile"
 # save_path itself. Runs on the profiled ranks.
 relocate_results: False
 
-# Shell command executed on the selected ranks when profiling finishes (after relocate_results).
-# Runs once per profiled step's stop(). The following environment variables are exported:
-# VERL_PROFILE_SAVE_PATH, VERL_PROFILE_TOOL, VERL_PROFILE_RANK, VERL_PROFILE_PID,
-# VERL_PROFILE_ROLE (if known) and VERL_PROFILE_RAY_NSIGHT_DIR (nsys only). null disables it.
+# Shell command executed on the selected ranks ONCE, after the last profiled step (relocate_results
+# still runs every profiled step, so traces accumulate in save_path). Meant to ship them off the
+# node in one shot, e.g. 'mlx asset upload "$VERL_PROFILE_SAVE_PATH"'; running once means uploading
+# the whole save_path sends each trace exactly once. Exported env: VERL_PROFILE_SAVE_PATH,
+# VERL_PROFILE_TOOL, VERL_PROFILE_RANK, VERL_PROFILE_PID, VERL_PROFILE_ROLE (if known) and
+# VERL_PROFILE_RAY_NSIGHT_DIR (nsys only). null disables it.
 finish_hook_cmd: null
 
 # Run finish_hook_cmd on all ranks.
 finish_hook_all_ranks: False
 
 # Ranks that run finish_hook_cmd. [] or [0,1,...]. When both this and finish_hook_all_ranks are
-# unset, the hook falls back to the profiled ranks (all_ranks / ranks).
+# unset, the hook falls back to the profiled ranks (all_ranks / ranks). save_path is usually
+# node-local, so choose one rank per node here to upload that node's directory once.
 finish_hook_ranks: []
 
 tool_config:

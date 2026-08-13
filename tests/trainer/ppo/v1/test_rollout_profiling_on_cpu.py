@@ -34,6 +34,9 @@ def _trainer(cls, **managers):
     trainer = cls.__new__(cls)
     trainer.config = OmegaConf.create({"global_profiler": {"profile_continuous_steps": False, "steps": [1]}})
     trainer.global_steps = 1
+    # The finish command fires only on the last profiled step; total_training_steps lets
+    # _stop_profiling decide whether this is it (here step 1 is the largest profiled step).
+    trainer.total_training_steps = 10
     trainer.prev_step_profile = False
     trainer.curr_step_profile = True
     trainer.next_step_profile = False

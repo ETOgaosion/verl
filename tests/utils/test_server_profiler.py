@@ -176,7 +176,7 @@ class TestRolloutTraceRelocation(unittest.TestCase):
 
 
 class TestRolloutFinishHook(unittest.TestCase):
-    """The rollout finish hook is what moves engine traces off the node they were written on."""
+    """The finish hook runs the user's command once, on the last profiled step (run_command=True)."""
 
     def _config(self, save_path: str, cmd: str, **kwargs) -> ProfilerConfig:
         return ProfilerConfig(
@@ -218,6 +218,38 @@ class TestRolloutFinishHook(unittest.TestCase):
 
             self.assertFalse(os.path.exists(marker))
 
+    def test_run_finish_hook_defers_the_command_until_the_final_step(self):
+        # The command runs once, on the last profiled step: earlier steps pass run_command=False, so
+        # nothing is uploaded yet (backend stop + relocation still happen elsewhere every step), and
+        # the last step passes run_command=True to fire the single upload of the whole save_path.
+        with tempfile.TemporaryDirectory() as save_path:
+            marker = os.path.join(save_path, "hook_ran")
+            profiler = DistProfiler(rank=0, config=self._config(save_path, f"touch {marker}"))
+
+            profiler.run_finish_hook(run_command=False)
+            self.assertFalse(os.path.exists(marker))  # not the last profiled step yet
+
+            profiler.run_finish_hook(run_command=True)
+            self.assertTrue(os.path.exists(marker))  # last step: command runs exactly once
+
+    def test_run_finish_hook_uploads_the_whole_save_path_once(self):
+        # A single end-of-run upload of the directory sends each accumulated trace exactly once --
+        # this is what replaces the per-step upload (which re-sent earlier steps every step).
+        with tempfile.TemporaryDirectory() as save_path:
+            uploaded = os.path.join(save_path, "uploaded.log")
+            cmd = f'for f in "$VERL_PROFILE_SAVE_PATH"/*.json.gz; do echo "$(basename "$f")" >> {uploaded}; done'
+            profiler = DistProfiler(rank=0, config=self._config(save_path, cmd))
+
+            # Both steps' traces have accumulated in save_path by the time the command runs.
+            for name in ("step1.json.gz", "step2.json.gz"):
+                with open(os.path.join(save_path, name), "w") as f:
+                    f.write("x")
+
+            profiler.run_finish_hook(run_command=True)
+
+            sent = open(uploaded).read().split()
+            self.assertEqual(sorted(sent), ["step1.json.gz", "step2.json.gz"])  # each exactly once
+
 
 class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
     async def test_vllm_start_stop_profile(self):
@@ -253,14 +285,14 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         with patch("verl.workers.rollout.vllm_rollout.vllm_async_server.relocate_rollout_traces") as mock_relocate:
             await vLLMHttpServer.stop_profile(mock_self)
         mock_engine.stop_profile.assert_called_once()
-        # Relocation runs once the engine has flushed, so the hook sees the relocated traces.
+        # Relocation runs every profiled step so the engine's traces accumulate in save_path.
         mock_relocate.assert_called_once_with(mock_profiler.config, mock_self.replica_rank)
-        # The engine bypasses DistProfiler.stop(), so the server must fire the finish hook itself,
-        # otherwise rollout traces are never uploaded. The hook reports the configured save_path,
-        # like every other rank, so a command written for that path covers the rollout too.
-        mock_profiler.run_finish_hook.assert_called_once_with()
+        # The engine does NOT run the finish command itself: it shares save_path with the colocated
+        # training worker, whose single end-of-run upload covers these relocated traces too. Running
+        # it here as well would upload the shared directory twice.
+        mock_profiler.run_finish_hook.assert_not_called()
 
-    async def test_vllm_stop_profile_skips_finish_hook_when_not_profiled(self):
+    async def test_vllm_stop_profile_skips_relocation_when_not_profiled(self):
         try:
             from verl.workers.rollout.vllm_rollout.vllm_async_server import vLLMHttpServer
         except ImportError:
@@ -280,9 +312,10 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
         mock_self.engine = mock_engine
         mock_self._should_profile = partial(vLLMHttpServer._should_profile, mock_self)
 
-        await vLLMHttpServer.stop_profile(mock_self)
+        with patch("verl.workers.rollout.vllm_rollout.vllm_async_server.relocate_rollout_traces") as mock_relocate:
+            await vLLMHttpServer.stop_profile(mock_self)
         mock_engine.stop_profile.assert_not_called()
-        mock_profiler.run_finish_hook.assert_not_called()
+        mock_relocate.assert_not_called()
 
     async def test_vllm_start_stop_profile_non_master_node(self):
         try:
@@ -345,9 +378,16 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
             mock_tokenizer_manager.start_profile.assert_called_once_with(**mock_args)
 
             # Test stop_profile
-            await SGLangHttpServer.stop_profile(mock_self)
+            with patch(
+                "verl.workers.rollout.sglang_rollout.async_sglang_server.relocate_rollout_traces"
+            ) as mock_relocate:
+                await SGLangHttpServer.stop_profile(mock_self)
             mock_tokenizer_manager.stop_profile.assert_called_once()
-            mock_profiler.run_finish_hook.assert_called_once_with()
+            # Relocation runs every profiled step so traces accumulate in save_path; the engine does
+            # not run the finish command itself (the colocated training worker's single end-of-run
+            # upload covers them), so running it here too would upload the shared directory twice.
+            mock_relocate.assert_called_once_with(mock_profiler.config, mock_self.replica_rank)
+            mock_profiler.run_finish_hook.assert_not_called()
 
 
 if __name__ == "__main__":

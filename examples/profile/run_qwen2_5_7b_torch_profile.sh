@@ -58,8 +58,15 @@ profile_sched_repeat=${PROFILE_SCHED_REPEAT:-0}
 # needs. Set PROFILE_RELOCATE=False to keep the engine's own layout.
 profile_relocate=${PROFILE_RELOCATE:-True}
 
-# Optional command run on each profiled rank when a step's profiling finishes, e.g. to upload the
-# traces (they are node-local otherwise). It runs against save_path, so name that same path here.
+# Optional command run ONCE, after the LAST profiled step, on each selected rank, e.g. to upload the
+# traces (they are node-local otherwise). Backend stop + relocate_results still run every profiled
+# step, so all steps' traces have accumulated in save_path by then; because the command runs a single
+# time (not once per step), uploading the whole directory sends each trace exactly once:
+#   PROFILE_FINISH_HOOK_CMD='mlx asset upload "$VERL_PROFILE_SAVE_PATH"'
+# save_path is usually node-local, so the command runs on every selected rank/node -- set
+# PROFILE_RANKS to one rank per node so each node's directory is uploaded once. Env vars exported:
+# VERL_PROFILE_SAVE_PATH, VERL_PROFILE_TOOL, VERL_PROFILE_RANK, VERL_PROFILE_PID, VERL_PROFILE_ROLE,
+# VERL_PROFILE_RAY_NSIGHT_DIR (nsys only).
 profile_finish_hook_cmd=${PROFILE_FINISH_HOOK_CMD:-null}
 
 # Inference (rollout) profiling. The vLLM engine profiler runs in discrete mode only and

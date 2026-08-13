@@ -27,7 +27,7 @@ from verl.plugin.platform import get_platform
 from verl.single_controller.ray import SubRayResourcePool
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.net_utils import is_valid_ipv6_address
-from verl.utils.profiler import DistProfiler
+from verl.utils.profiler import DistProfiler, relocate_rollout_traces
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.replica import RolloutMode, RolloutReplica, TokenOutput
 from verl.workers.rollout.utils import get_max_position_embeddings, qwen2_5_vl_dedup_image_tokens, run_uvicorn
@@ -463,10 +463,11 @@ class TRTLLMHttpServer:
     async def stop_profile(self):
         if self.profiler_controller.check_enable() and self.profiler_controller.check_this_rank():
             await self.llm.collective_rpc("stop_profile")
-            # The engine writes traces directly, bypassing DistProfiler.stop(), so the finish
-            # hook has to be triggered here. Running it from this actor also keeps it on the
-            # node that holds the trace files.
-            self.profiler_controller.run_finish_hook()
+            # Relocate the engine's traces into save_path (when relocate_results is set) so the
+            # training worker's single end-of-run upload of the whole save_path picks them up. The
+            # rollout engine does not run the finish command itself: it shares save_path with the
+            # colocated training worker, so uploading here too would send the same directory twice.
+            relocate_rollout_traces(self.profiler_controller.config, self.replica_rank)
 
     def _init_profiler_controller(self) -> DistProfiler:
         profiler_config = self.config.profiler

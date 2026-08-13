@@ -1138,20 +1138,26 @@ class RayPPOTrainer:
             seen.add(id(self.critic_wg))
             self.critic_wg.start_profile(profile_step=self.global_steps)
 
-    def _stop_profiling(self, do_profile: bool) -> None:
-        """Stop profiling for all worker groups if profiling is enabled."""
+    def _stop_profiling(self, do_profile: bool, run_command: bool = False) -> None:
+        """Stop profiling for all worker groups if profiling is enabled.
+
+        ``run_command`` is passed straight to ``stop_profile`` and is True only on the last profiled
+        step, so the finish command (e.g. a one-shot upload of the whole save_path) fires once at the
+        end rather than once per profiled step. Backend stop and artifact relocation still happen on
+        every profiled step.
+        """
         if not do_profile:
             return
         # See _start_profiling: skip aliased worker groups so the finish hook (and any trace upload
         # it triggers) fires exactly once per distinct process instead of once per role alias.
-        self.actor_rollout_wg.stop_profile()
+        self.actor_rollout_wg.stop_profile(run_command=run_command)
         seen = {id(self.actor_rollout_wg)}
         if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
             seen.add(id(self.ref_policy_wg))
-            self.ref_policy_wg.stop_profile()
+            self.ref_policy_wg.stop_profile(run_command=run_command)
         if self.use_critic and id(self.critic_wg) not in seen:
             seen.add(id(self.critic_wg))
-            self.critic_wg.stop_profile()
+            self.critic_wg.stop_profile(run_command=run_command)
 
     def _get_dp_size(self, worker_group, role: str) -> int:
         """Get data parallel size from worker group dispatch info.
@@ -1733,10 +1739,21 @@ class RayPPOTrainer:
                         if self.config.global_profiler.steps is not None
                         else False
                     )
+                    # Run the finish command (e.g. the trace upload) only once, on the last profiled
+                    # step, so a command that uploads the whole save_path sends each trace once rather
+                    # than re-uploading the accumulating directory every step. "Last" is the largest
+                    # configured step, or the run's final step if it ends earlier on a profiled step.
+                    profiled_steps = self.config.global_profiler.steps
+                    run_finish_command = bool(
+                        curr_step_profile
+                        and profiled_steps
+                        and (self.global_steps == max(profiled_steps) or is_last_step)
+                    )
                     self._stop_profiling(
                         curr_step_profile and not next_step_profile
                         if self.config.global_profiler.profile_continuous_steps
-                        else curr_step_profile
+                        else curr_step_profile,
+                        run_command=run_finish_command,
                     )
                     prev_step_profile = curr_step_profile
                     curr_step_profile = next_step_profile

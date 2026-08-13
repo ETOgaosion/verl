@@ -851,11 +851,11 @@ class vLLMHttpServer:
             return
         if self._should_profile():
             await self.engine.stop_profile()
+            # Relocate the engine's traces into save_path (when relocate_results is set) so the
+            # training worker's single end-of-run upload of the whole save_path picks them up. The
+            # rollout engine does not run the finish command itself: it shares save_path with the
+            # colocated training worker, so uploading here too would send the same directory twice.
             relocate_rollout_traces(self.profiler_controller.config, self.replica_rank)
-            # The engine writes traces directly, bypassing DistProfiler.stop(), so the finish
-            # hook has to be triggered here. Running it from this actor also keeps it on the
-            # node that holds the trace files.
-            self.profiler_controller.run_finish_hook()
 
     async def set_global_steps(self, global_steps: int):
         """Set the global steps of the model weights."""

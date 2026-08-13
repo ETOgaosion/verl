@@ -126,9 +126,9 @@ When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance d
    Set `global_profiler.relocate_results: True` to have those traces moved up into `save_path`
    itself when the step finishes, named `rollout-replica<n>_<engine's own file name>` so the
    replica is still identifiable; that keeps every trace of a step in the one directory you
-   configured, which is what post-processing that does not walk sub-directories needs.
-   `finish_hook_cmd` then runs on the replica's node, and is the only thing that moves traces off
-   it.
+   configured, which is what post-processing that does not walk sub-directories needs. The rollout
+   engine does not run `finish_hook_cmd` itself: the colocated training worker's single end-of-run
+   upload of `save_path` (which now includes these relocated traces) is what moves them off the node.
 
 ### 3. Scheduling the update loop's mini-batches
 
@@ -321,33 +321,44 @@ already keeps the files unique and self-describing. Rollout engine traces are th
 because the engines are given a directory to write to; `relocate_results: True` pulls them into
 `save_path` as well.
 
-To ship the traces somewhere after each profiled step, set the hook once on `global_profiler`
-(every role inherits it). Every rank runs it against the `save_path` you configured, including the
-rollout replicas, so the command can just name that path:
+To ship the traces off the node, set the hook once on `global_profiler` (every role inherits it). It
+runs **once, after the last profiled step**, on each selected rank -- not once per step.
+
+`save_path` is one flat directory that *accumulates* every profiled step's traces (backend `stop()`
+and `relocate_results` still run every step, so by the last step everything is there). Because the
+command runs a single time rather than once per step, a command that uploads the whole directory
+sends each trace exactly once:
 
 ```bash
     global_profiler.save_path="$PROFILE_SAVE_PATH" \
     global_profiler.relocate_results=True \
-    global_profiler.finish_hook_cmd="my-upload-tool $PROFILE_SAVE_PATH"
+    global_profiler.finish_hook_cmd='my-upload-tool "$VERL_PROFILE_SAVE_PATH"'
 ```
 
-A command that would rather be told the path than repeat it can read `VERL_PROFILE_SAVE_PATH`
-(the same value) from the environment, next to `VERL_PROFILE_TOOL`, `VERL_PROFILE_RANK`,
-`VERL_PROFILE_PID` and `VERL_PROFILE_ROLE`. Quote such a value in single quotes so your shell does
-not expand it early:
+Running once is also what avoids the "N copies of the same trace" problem. If the command instead
+ran every profiled step, a directory upload would re-send step 1's file at step 2, again at step 3,
+and so on -- verl writes each trace once, but the upload re-sends the older ones -- and an uploader
+that versions by upload time then stores that one trace as several `*.gz` differing only in the
+trailing timestamp. A single upload at the end sends each trace once, so there are no duplicate
+versions.
 
-```bash
-    global_profiler.finish_hook_cmd='my-upload-tool $VERL_PROFILE_SAVE_PATH'
-```
+`save_path` is usually node-local, so the command runs on every selected rank/node. Choose the
+finish-hook ranks so exactly one rank per node uploads that node's directory (otherwise several ranks
+sharing a node's directory would each upload it). When unset, the finish-hook ranks default to the
+profiled ranks; narrow them with `finish_hook_ranks=[...]` (see
+[Nsight Systems profiling](nsight_profiling.md) for choosing ranks).
 
-Either way the value must not contain quotes of its own -- Hydra's override parser rejects
-`'my-upload-tool "$VERL_PROFILE_SAVE_PATH"'`. If the command needs quoting (paths with spaces),
-point the hook at a small script instead.
+The command runs through the shell, so the context variables `VERL_PROFILE_SAVE_PATH`,
+`VERL_PROFILE_TOOL`, `VERL_PROFILE_RANK`, `VERL_PROFILE_PID` and `VERL_PROFILE_ROLE` are all available
+(quote them in single quotes so your shell does not expand them early). Hydra's override parser
+rejects a value that contains its own quotes, so a command that needs quoting belongs in a small
+script that the hook calls.
 
-The hook prints the command, its output and its exit code to the worker's log on every
-`stop_profile`. Rollout replicas run it from their own server actor once the engine has flushed.
-See [Nsight Systems profiling](nsight_profiling.md) for the full description of the hook,
-including how to choose which ranks run it.
+The hook prints the command, its output and its exit code to the worker's log. Rollout replicas do
+not run the command themselves: they relocate their traces into `save_path` (with
+`relocate_results`), and the colocated training worker's single end-of-run upload covers them too.
+See [Nsight Systems profiling](nsight_profiling.md) for the full description of the hook, including
+how to choose which ranks run it.
 
 You can visualize them using:
 
