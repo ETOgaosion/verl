@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from verl.utils.device import get_torch_device
+from verl.utils.device import get_torch_device, is_cuda_available
 
 
 def set_random_seed(seed):
@@ -25,7 +25,12 @@ def set_random_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-    if get_torch_device().device_count() > 0:
+    # model_parallel_cuda_manual_seed() drives Megatron-Core's CUDA RNG tracker, whose
+    # add() unconditionally reads the CUDA RNG state. On Ascend/NPU torch has no CUDA
+    # backend, so that raises "Torch not compiled with CUDA enabled". Gate on real CUDA
+    # availability to match the pre-device-management-refactor behavior (NPU skipped this
+    # call because the CUDA device count was 0).
+    if is_cuda_available and get_torch_device().device_count() > 0:
         from megatron.core import tensor_parallel
 
         tensor_parallel.model_parallel_cuda_manual_seed(seed)
