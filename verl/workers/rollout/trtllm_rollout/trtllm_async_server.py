@@ -27,7 +27,12 @@ from verl.plugin.platform import get_platform
 from verl.single_controller.ray import SubRayResourcePool
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.net_utils import is_valid_ipv6_address
-from verl.utils.profiler import DistProfiler, build_rollout_dist_profiler, relocate_rollout_traces
+from verl.utils.profiler import (
+    DistProfiler,
+    build_rollout_dist_profiler,
+    relocate_rollout_traces,
+    rollout_profiler_global_ranks,
+)
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.replica import RolloutMode, RolloutReplica, TokenOutput
 from verl.workers.rollout.utils import get_max_position_embeddings, qwen2_5_vl_dedup_image_tokens, run_uvicorn
@@ -467,7 +472,12 @@ class TRTLLMHttpServer:
             # training worker's single end-of-run upload of the whole save_path picks them up. The
             # rollout engine does not run the finish command itself: it shares save_path with the
             # colocated training worker, so uploading here too would send the same directory twice.
-            relocate_rollout_traces(self.profiler_controller.config, self.replica_rank)
+            relocate_rollout_traces(
+                self.profiler_controller.config,
+                self.replica_rank,
+                self.replica_world_size,
+                self.profiler_keep_global_ranks,
+            )
 
     def _init_profiler_controller(self) -> DistProfiler:
         profiler_config = self.config.profiler
@@ -487,13 +497,16 @@ class TRTLLMHttpServer:
         # `ranks` in the rollout profiler config are global GPU ranks (as in the training roles);
         # map them to the replica that owns them so e.g. ranks=[0, 8] with tp=8 profiles the replicas
         # holding global ranks 0 and 8 (replicas 0 and 1), not replica indices 0 and 8.
-        replica_world_size = (
+        self.replica_world_size = (
             self.config.tensor_model_parallel_size
             * self.config.data_parallel_size
             * self.config.pipeline_model_parallel_size
         )
+        # A tp>1 engine profiles its whole replica, but the user asked for specific global GPU ranks;
+        # keep only those when relocating so ranks=[0, 8] yields exactly GPU 0 and 8, not their tp-mates.
+        self.profiler_keep_global_ranks = rollout_profiler_global_ranks(profiler_config)
         return build_rollout_dist_profiler(
-            self.replica_rank, replica_world_size, config=profiler_config, tool_config=tool_config
+            self.replica_rank, self.replica_world_size, config=profiler_config, tool_config=tool_config
         )
 
 

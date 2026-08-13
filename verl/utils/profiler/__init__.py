@@ -18,6 +18,7 @@ from .config import (
     build_sglang_profiler_args,
     build_vllm_profiler_args,
     relocate_rollout_traces,
+    rollout_profiler_global_ranks,
     rollout_trace_dir,
 )
 from .performance import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
@@ -48,4 +49,5 @@ __all__ = [
     "build_sglang_profiler_args",
     "rollout_trace_dir",
     "relocate_rollout_traces",
+    "rollout_profiler_global_ranks",
 ]

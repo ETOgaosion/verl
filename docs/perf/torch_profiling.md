@@ -107,14 +107,17 @@ actor_rollout_ref:
 When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance data for the Rollout phase **must be collected using discrete mode**. In this case, the Profiler is triggered by the inference engine backend.
 
 1. Rank Definition: `ranks` in the Rollout configuration are global GPU ranks, the same as in the
-   training roles. A rollout replica drives one inference engine spanning
-   `world_size = tensor_model_parallel_size * data_parallel_size * pipeline_model_parallel_size`
-   GPUs, and replica `r` owns global ranks `[r*world_size, (r+1)*world_size)`. Each listed rank is
-   mapped to the replica that owns it (`replica = rank // world_size`) and that whole replica is
-   profiled, so with `tp=8` `ranks: [0, 8]` profiles the replicas holding global ranks 0 and 8
-   (replicas 0 and 1). Ranks that land on a replica that does not exist are silently ignored.
-   `all_ranks: True` profiles every replica; leaving `ranks` empty profiles the replica that owns
-   global rank 0.
+   training roles, and you get traces for exactly those GPUs. A rollout replica drives one inference
+   engine spanning `world_size = tensor_model_parallel_size * data_parallel_size *
+   pipeline_model_parallel_size` GPUs, and replica `r` owns global ranks `[r*world_size,
+   (r+1)*world_size)`. Each listed rank is mapped to the replica that owns it
+   (`replica = rank // world_size`), and that replica's engine is profiled. A tensor-parallel group
+   cannot be profiled a GPU at a time, so the engine traces every GPU in the replica, but only the
+   traces for the ranks you listed are surfaced (see Trace Location) -- the rest are left aside. So
+   with `tp=2` `ranks: [0, 8]` gives you exactly global GPUs 0 and 8 (from replicas 0 and 4), not
+   their tp-mates 1 and 9. Ranks that land on a replica that does not exist are silently ignored.
+   `all_ranks: True` profiles and keeps every replica; leaving `ranks` empty profiles the replica
+   that owns global rank 0 and keeps all of its GPUs.
 
 2. Inference Engine Support: Currently, vLLM and SGLang engines are supported without additional settings. Specific details are as follows:
 
@@ -127,10 +130,18 @@ When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance d
 
 4. Trace Location: the engines take an output directory rather than a file name, so each replica
    writes into its own `<save_path>/agent_loop_rollout_replica_<n>/` on the node that hosts it.
-   Set `global_profiler.relocate_results: True` to have those traces moved up into `save_path`
-   itself when the step finishes, named `rollout-replica<n>_<engine's own file name>` so the
-   replica is still identifiable; that keeps every trace of a step in the one directory you
-   configured, which is what post-processing that does not walk sub-directories needs. The rollout
+   Set `global_profiler.relocate_results: True` to have the requested GPUs' traces moved up into
+   `save_path` itself when the step finishes; that keeps every trace of a step in the one directory
+   you configured, which is what post-processing that does not walk sub-directories needs. Relocated
+   files are named `rollout-replica<n>-globalrank<g>_<engine's own file name>`, where `<n>` is the
+   replica index and `<g>` is the file's absolute global GPU rank
+   (`replica * world_size + tp_rank`), so the names line up with the global `ranks` you configured
+   -- e.g. with `tp=2`, `ranks: [0, 8]` puts just `rollout-replica0-globalrank0_...` and
+   `rollout-replica4-globalrank8_...` in `save_path`. The tp-mates the engine also traced (global
+   GPUs 1 and 9 here) are left in the per-replica sub-directory, so `save_path` shows exactly the
+   ranks you asked for. The engine's own file name usually carries the per-GPU tensor-parallel rank
+   (the `rank<k>` suffix); when it does not, the global rank cannot be determined, so the trace is
+   kept (never dropped) and named just `rollout-replica<n>_<engine's own file name>`. The rollout
    engine does not run `finish_hook_cmd` itself: the colocated training worker's single end-of-run
    upload of `save_path` (which now includes these relocated traces) is what moves them off the node.
 

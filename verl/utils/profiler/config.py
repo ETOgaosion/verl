@@ -14,8 +14,10 @@
 
 import json
 import os
+import re
 import shutil
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -333,7 +335,28 @@ def rollout_trace_dir(profiler_config: ProfilerConfig, rank: int) -> str:
     return os.path.join(profiler_config.save_path, f"agent_loop_rollout_replica_{rank}")
 
 
-def relocate_rollout_traces(profiler_config: ProfilerConfig, rank: int) -> list[str]:
+def rollout_profiler_global_ranks(profiler_config: Optional["ProfilerConfig"]) -> Optional[set[int]]:
+    """The exact global GPU ranks a rollout replica should surface traces for, or ``None`` to keep
+    every trace.
+
+    ``ranks`` in a rollout profiler config are global GPU ranks (as in the training roles). Because a
+    ``tp>1`` engine cannot profile a subset of its tensor-parallel group, it traces every GPU in the
+    replica; this returns the ranks the user actually asked for so :func:`relocate_rollout_traces`
+    can surface only those (via its ``keep_global_ranks`` argument). ``None`` means "keep all" and is
+    returned when profiling is off, ``all_ranks`` is set, or ``ranks`` is empty (the default).
+    """
+    if profiler_config is None or getattr(profiler_config, "all_ranks", False):
+        return None
+    ranks = {int(r) for r in (getattr(profiler_config, "ranks", None) or [])}
+    return ranks or None
+
+
+def relocate_rollout_traces(
+    profiler_config: ProfilerConfig,
+    rank: int,
+    world_size: int = 1,
+    keep_global_ranks: Optional[Iterable[int]] = None,
+) -> list[str]:
     """Move the engine traces of replica ``rank`` up into ``save_path``. No-op unless
     ``relocate_results`` is set.
 
@@ -342,6 +365,24 @@ def relocate_rollout_traces(profiler_config: ProfilerConfig, rank: int) -> list[
     sees them. Relocating puts a step's rollout traces in the same directory as its training
     traces, which is the one directory the run configured. The replica moves into the file name,
     since it is no longer in the path.
+
+    ``world_size`` is the number of GPUs the replica spans (``tp * dp * pp``). A replica drives one
+    engine, which writes one trace per GPU and (for the supported engines) encodes that GPU's
+    tensor-parallel rank in the file name (e.g. ``...rank1...``). When ``world_size > 1`` and that
+    tp rank can be read, the file's absolute global GPU rank (``rank * world_size + tp_rank``) is
+    added to the relocated name so the flattened files line up with the global ``ranks`` the user
+    configured -- e.g. with ``tp=2`` replica 4's tp rank 0 becomes ``rollout-replica4-globalrank8_...``.
+    When the tp rank is not encoded in the name (or ``world_size <= 1``, where the replica index is
+    already the global rank) only the replica index is used.
+
+    ``keep_global_ranks`` is the exact set of global GPU ranks the user asked to profile. A ``tp>1``
+    engine has to profile its whole replica (there is no way to profile a subset of a tensor-parallel
+    group), so it writes a trace for every GPU it spans; passing ``keep_global_ranks`` relocates only
+    the traces for those GPUs and leaves the unrequested tp-mates in the sub-directory. So with
+    ``tp=2`` and ``ranks=[0, 8]`` (``keep_global_ranks={0, 8}``) exactly global GPUs 0 and 8 land in
+    ``save_path``, not their tp-mates 1 and 9. Pass ``None`` (the default, and what ``all_ranks`` or an
+    empty ``ranks`` should use) to keep every trace. A file whose global rank cannot be read is always
+    kept, so filtering never silently drops a requested rank.
 
     Anything an engine flushes after this stays in the sub-directory, so late writes are kept
     rather than lost. Returns the new paths; files that cannot be moved are reported and skipped.
@@ -353,9 +394,23 @@ def relocate_rollout_traces(profiler_config: ProfilerConfig, rank: int) -> list[
     if not os.path.isdir(src_dir):
         return []
 
+    keep = {int(r) for r in keep_global_ranks} if keep_global_ranks is not None else None
+    base_global_rank = rank * world_size if world_size and world_size > 0 else rank
+
     relocated = []
     for name in sorted(os.listdir(src_dir)):
-        dst = os.path.join(profiler_config.save_path, f"rollout-replica{rank}_{name}")
+        prefix = f"rollout-replica{rank}_"
+        global_rank = None
+        if world_size and world_size > 1:
+            tp_match = re.search(r"rank[_-]?(\d+)", name)
+            if tp_match and int(tp_match.group(1)) < world_size:
+                global_rank = base_global_rank + int(tp_match.group(1))
+                prefix = f"rollout-replica{rank}-globalrank{global_rank}_"
+        # Keep only the GPUs the user asked for; a tp>1 engine also traced its other ranks, but those
+        # are left in the sub-directory rather than surfaced. Unknown ranks are kept, never dropped.
+        if keep is not None and global_rank is not None and global_rank not in keep:
+            continue
+        dst = os.path.join(profiler_config.save_path, prefix + name)
         try:
             shutil.move(os.path.join(src_dir, name), dst)
         except Exception as e:

@@ -26,6 +26,7 @@ from verl.utils.profiler.config import (
     build_sglang_profiler_args,
     build_vllm_profiler_args,
     relocate_rollout_traces,
+    rollout_profiler_global_ranks,
     rollout_trace_dir,
 )
 from verl.utils.profiler.profile import DistProfiler, build_rollout_dist_profiler
@@ -173,6 +174,120 @@ class TestRolloutTraceRelocation(unittest.TestCase):
             config = self._config(save_path, relocate_results=True)
 
             self.assertEqual(relocate_rollout_traces(config, rank=1), [])
+
+    def test_global_gpu_rank_is_added_when_the_engine_encodes_the_tp_rank(self):
+        # The name should line up with the global `ranks` the user configured: with tp=2, replica 4
+        # drives the engine spanning global GPUs 8 and 9, and the engine names its per-GPU traces by
+        # tensor-parallel rank, so rank0 -> global 8 and rank1 -> global 9.
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 4, "rank0.pt.trace.json.gz", "rank1.pt.trace.json.gz")
+
+            relocated = relocate_rollout_traces(config, rank=4, world_size=2)
+
+            self.assertEqual(
+                sorted(os.path.basename(p) for p in relocated),
+                [
+                    "rollout-replica4-globalrank8_rank0.pt.trace.json.gz",
+                    "rollout-replica4-globalrank9_rank1.pt.trace.json.gz",
+                ],
+            )
+
+    def test_replica_index_is_used_when_the_tp_rank_is_not_in_the_name(self):
+        # Engines that name traces by host/pid instead of tp rank cannot be mapped to a single GPU,
+        # so the whole (tp-sharded) engine keeps the replica-only name.
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 4, "host_123.pt.trace.json.gz")
+
+            relocated = relocate_rollout_traces(config, rank=4, world_size=2)
+
+            self.assertEqual(
+                [os.path.basename(p) for p in relocated],
+                ["rollout-replica4_host_123.pt.trace.json.gz"],
+            )
+
+    def test_world_size_one_keeps_the_replica_index_which_already_is_the_global_rank(self):
+        # tp=dp=pp=1: the replica index equals the global GPU rank, so no extra suffix is needed.
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 8, "rank0.pt.trace.json.gz")
+
+            relocated = relocate_rollout_traces(config, rank=8, world_size=1)
+
+            self.assertEqual(
+                [os.path.basename(p) for p in relocated],
+                ["rollout-replica8_rank0.pt.trace.json.gz"],
+            )
+
+    def test_ranks_0_and_8_yield_exactly_gpu_0_and_8_not_their_tp_mates(self):
+        # The whole point: tp=2 forces the engine to trace its whole replica, but ranks=[0, 8] must
+        # surface exactly global GPUs 0 and 8. Replica 0 owns GPUs 0-1 and replica 4 owns GPUs 8-9,
+        # so tp rank 1 (GPUs 1 and 9) is dropped, not relocated into save_path.
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 0, "rank0.pt.trace.json.gz", "rank1.pt.trace.json.gz")
+            self._write_engine_traces(config, 4, "rank0.pt.trace.json.gz", "rank1.pt.trace.json.gz")
+
+            kept0 = relocate_rollout_traces(config, rank=0, world_size=2, keep_global_ranks={0, 8})
+            kept4 = relocate_rollout_traces(config, rank=4, world_size=2, keep_global_ranks={0, 8})
+
+            self.assertEqual(
+                [os.path.basename(p) for p in kept0],
+                ["rollout-replica0-globalrank0_rank0.pt.trace.json.gz"],
+            )
+            self.assertEqual(
+                [os.path.basename(p) for p in kept4],
+                ["rollout-replica4-globalrank8_rank0.pt.trace.json.gz"],
+            )
+            # The flat traces in save_path (ignoring the per-replica sub-directories) are only the
+            # two GPUs that were asked for.
+            top_level_files = sorted(
+                name for name in os.listdir(save_path) if os.path.isfile(os.path.join(save_path, name))
+            )
+            self.assertEqual(
+                top_level_files,
+                [
+                    "rollout-replica0-globalrank0_rank0.pt.trace.json.gz",
+                    "rollout-replica4-globalrank8_rank0.pt.trace.json.gz",
+                ],
+            )
+            # The unrequested tp-mates are left behind in the sub-directory, not deleted.
+            self.assertEqual(os.listdir(rollout_trace_dir(config, 0)), ["rank1.pt.trace.json.gz"])
+            self.assertEqual(os.listdir(rollout_trace_dir(config, 4)), ["rank1.pt.trace.json.gz"])
+
+    def test_filtering_never_drops_a_file_whose_global_rank_is_unknown(self):
+        # If the tp rank cannot be read from the engine's name we cannot prove the file is unwanted,
+        # so it is kept rather than risk dropping a rank the user asked for.
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 0, "host_123.pt.trace.json.gz")
+
+            relocated = relocate_rollout_traces(config, rank=0, world_size=2, keep_global_ranks={0})
+
+            self.assertEqual(
+                [os.path.basename(p) for p in relocated],
+                ["rollout-replica0_host_123.pt.trace.json.gz"],
+            )
+
+
+class TestRolloutProfilerGlobalRanks(unittest.TestCase):
+    """`rollout_profiler_global_ranks` derives the "keep" set relocation uses from the config."""
+
+    def _config(self, **kwargs) -> ProfilerConfig:
+        return ProfilerConfig(tool="torch", enable=True, save_path="/tmp/test", tool_config=None, **kwargs)
+
+    def test_explicit_ranks_become_the_keep_set(self):
+        self.assertEqual(rollout_profiler_global_ranks(self._config(ranks=[0, 8])), {0, 8})
+
+    def test_all_ranks_keeps_everything(self):
+        self.assertIsNone(rollout_profiler_global_ranks(self._config(all_ranks=True, ranks=[0, 8])))
+
+    def test_empty_ranks_keeps_everything(self):
+        self.assertIsNone(rollout_profiler_global_ranks(self._config(ranks=[])))
+
+    def test_missing_profiler_config_keeps_everything(self):
+        self.assertIsNone(rollout_profiler_global_ranks(None))
 
 
 class TestRolloutFinishHook(unittest.TestCase):
