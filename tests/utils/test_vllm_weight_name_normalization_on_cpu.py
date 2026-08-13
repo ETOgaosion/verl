@@ -29,6 +29,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -645,6 +646,11 @@ class _FakeBucketReceiver:
 
 def test_update_weights_from_ipc_accumulates_lora_across_buckets(monkeypatch):
     """A LoRA adapter split across two buckets yields one add_lora with all tensors."""
+    # Unlike the resolver tests above (which fully stub sys.modules), this drives the
+    # real update_weights_from_ipc path and imports the actual bucketed_weight_transfer
+    # module, whose package __init__ hard-requires vllm. vllm isn't in the `cpu` extra,
+    # so this is skipped under cpu_unit_tests and run in vllm.yml (the vllm venv).
+    pytest.importorskip("vllm")
     import verl.workers.rollout.vllm_rollout.bucketed_weight_transfer as bwt
 
     monkeypatch.setattr(
@@ -686,6 +692,9 @@ def test_update_weights_from_ipc_accumulates_lora_across_buckets(monkeypatch):
 
 def test_update_weights_from_ipc_standard_loads_per_bucket(monkeypatch):
     """Standard (non-LoRA) base sync loads every bucket immediately (no accumulation)."""
+    # See the note above: needs the real bucketed_weight_transfer (vllm-backed), which
+    # the `cpu` extra can't provide, so it is skipped here and run in vllm.yml.
+    pytest.importorskip("vllm")
     import verl.workers.rollout.vllm_rollout.bucketed_weight_transfer as bwt
 
     monkeypatch.setattr(
