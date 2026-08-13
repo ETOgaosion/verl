@@ -27,7 +27,7 @@ from verl.plugin.platform import get_platform
 from verl.single_controller.ray import SubRayResourcePool
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.net_utils import is_valid_ipv6_address
-from verl.utils.profiler import DistProfiler, relocate_rollout_traces
+from verl.utils.profiler import DistProfiler, build_rollout_dist_profiler, relocate_rollout_traces
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.replica import RolloutMode, RolloutReplica, TokenOutput
 from verl.workers.rollout.utils import get_max_position_embeddings, qwen2_5_vl_dedup_image_tokens, run_uvicorn
@@ -484,7 +484,17 @@ class TRTLLMHttpServer:
             elif profiler_config.tool is not None:
                 logger.warning(f"trtllm rollout: unsupported profiler tool '{profiler_config.tool}', disabling")
                 profiler_config = None
-        return DistProfiler(self.replica_rank, config=profiler_config, tool_config=tool_config)
+        # `ranks` in the rollout profiler config are global GPU ranks (as in the training roles);
+        # map them to the replica that owns them so e.g. ranks=[0, 8] with tp=8 profiles the replicas
+        # holding global ranks 0 and 8 (replicas 0 and 1), not replica indices 0 and 8.
+        replica_world_size = (
+            self.config.tensor_model_parallel_size
+            * self.config.data_parallel_size
+            * self.config.pipeline_model_parallel_size
+        )
+        return build_rollout_dist_profiler(
+            self.replica_rank, replica_world_size, config=profiler_config, tool_config=tool_config
+        )
 
 
 class TRTLLMReplica(RolloutReplica):

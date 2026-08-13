@@ -21,7 +21,7 @@ from .config import (
     rollout_trace_dir,
 )
 from .performance import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
-from .profile import DistProfiler, DistProfilerExtension, ProfilerConfig
+from .profile import DistProfiler, DistProfilerExtension, ProfilerConfig, build_rollout_dist_profiler
 
 # Select marker implementations by availability, but keep DistProfiler as our dispatcher
 if is_nvtx_available():
@@ -41,6 +41,7 @@ __all__ = [
     "DistProfiler",
     "DistProfilerExtension",
     "ProfilerConfig",
+    "build_rollout_dist_profiler",
     "simple_timer",
     "marked_timer",
     "build_vllm_profiler_args",

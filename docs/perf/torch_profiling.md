@@ -90,7 +90,7 @@ actor_rollout_ref:
     profiler:
       enable: True # Set to True to profile inference
       all_ranks: False
-      ranks: [0] # In Agent Loop, this is the Replica Rank (e.g. 0-th instance)
+      ranks: [0] # Global GPU rank(s); each is mapped to the replica that owns it
       tool_config:
         torch:
           discrete: True # REQUIRED 
@@ -106,11 +106,15 @@ actor_rollout_ref:
 
 When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance data for the Rollout phase **must be collected using discrete mode**. In this case, the Profiler is triggered by the inference engine backend.
 
-1. Rank Definition: ranks in the Rollout configuration refers to Replica Rank (inference instance
-   index), not Global Rank. A run has `rollout.nnodes * rollout.n_gpus_per_node /
-   rollout.tensor_model_parallel_size` replicas, so with 2 nodes of 8 GPUs at `tp=2` the valid
-   values are `0`-`7`. Values outside that range never match a replica and are silently ignored,
-   which is easy to hit when copying `ranks` from a training role, where they are global ranks.
+1. Rank Definition: `ranks` in the Rollout configuration are global GPU ranks, the same as in the
+   training roles. A rollout replica drives one inference engine spanning
+   `world_size = tensor_model_parallel_size * data_parallel_size * pipeline_model_parallel_size`
+   GPUs, and replica `r` owns global ranks `[r*world_size, (r+1)*world_size)`. Each listed rank is
+   mapped to the replica that owns it (`replica = rank // world_size`) and that whole replica is
+   profiled, so with `tp=8` `ranks: [0, 8]` profiles the replicas holding global ranks 0 and 8
+   (replicas 0 and 1). Ranks that land on a replica that does not exist are silently ignored.
+   `all_ranks: True` profiles every replica; leaving `ranks` empty profiles the replica that owns
+   global rank 0.
 
 2. Inference Engine Support: Currently, vLLM and SGLang engines are supported without additional settings. Specific details are as follows:
 

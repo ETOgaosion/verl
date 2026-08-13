@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import dataclasses
 import functools
 import logging
 import os
@@ -375,6 +377,41 @@ class DistProfiler:
             return wrapper
 
         return decorator
+
+
+def build_rollout_dist_profiler(
+    replica_rank: int,
+    replica_world_size: int,
+    config: Optional[ProfilerConfig] = None,
+    tool_config: Optional[object] = None,
+) -> "DistProfiler":
+    """Build a :class:`DistProfiler` for a rollout replica, treating ``config.ranks`` as global GPU ranks.
+
+    Training workers key their ``DistProfiler`` on the worker's own global GPU rank, so ``ranks``
+    lists global ranks there. A rollout replica instead drives a single inference engine that spans
+    ``replica_world_size`` GPUs (``tensor_model_parallel_size * data_parallel_size *
+    pipeline_model_parallel_size``); replica ``r`` owns the global ranks
+    ``[r * replica_world_size, (r + 1) * replica_world_size)``.
+
+    To keep ``ranks`` meaning the same thing for rollout as for the training roles, every rank in
+    ``config.ranks`` is mapped to the replica that owns it (``rank // replica_world_size``) and the
+    replica is profiled when it owns at least one requested rank. For example with
+    ``replica_world_size == 8`` (e.g. ``tp=8``), ``ranks=[0, 8]`` profiles replica 0 (owns global
+    rank 0) and replica 1 (owns global rank 8) instead of replica indices 0 and 8. ``all_ranks`` and
+    the empty-``ranks`` default (profile the replica owning global rank 0, i.e. replica 0) are
+    preserved.
+    """
+    if config is not None and not getattr(config, "all_ranks", False):
+        ranks = list(getattr(config, "ranks", None) or [])
+        if ranks and replica_world_size and replica_world_size > 0:
+            replica_ranks = sorted({int(rank) // replica_world_size for rank in ranks})
+            if dataclasses.is_dataclass(config) and not isinstance(config, type):
+                config = dataclasses.replace(config, ranks=replica_ranks)
+            else:
+                # OmegaConf DictConfig or other mutable mapping-style config.
+                config = copy.deepcopy(config)
+                config.ranks = replica_ranks
+    return DistProfiler(rank=replica_rank, config=config, tool_config=tool_config)
 
 
 class _NoOpProfiler:
