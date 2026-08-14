@@ -523,7 +523,12 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
             await vLLMHttpServer.stop_profile(mock_self)
         mock_engine.stop_profile.assert_called_once()
         # Relocation runs every profiled step so the engine's traces accumulate in save_path.
-        mock_relocate.assert_called_once_with(mock_profiler.config, mock_self.replica_rank)
+        mock_relocate.assert_called_once_with(
+            mock_profiler.config,
+            mock_self.replica_rank,
+            mock_self.replica_world_size,
+            mock_self.profiler_keep_global_ranks,
+        )
         # The engine does NOT run the finish command itself: it shares save_path with the colocated
         # training worker, whose single end-of-run upload covers these relocated traces too. Running
         # it here as well would upload the shared directory twice.
@@ -623,7 +628,12 @@ class TestServerProfilerFunctionality(unittest.IsolatedAsyncioTestCase):
             # Relocation runs every profiled step so traces accumulate in save_path; the engine does
             # not run the finish command itself (the colocated training worker's single end-of-run
             # upload covers them), so running it here too would upload the shared directory twice.
-            mock_relocate.assert_called_once_with(mock_profiler.config, mock_self.replica_rank)
+            mock_relocate.assert_called_once_with(
+                mock_profiler.config,
+                mock_self.replica_rank,
+                mock_self.replica_world_size,
+                mock_self.profiler_keep_global_ranks,
+            )
             mock_profiler.run_finish_hook.assert_not_called()
 
 
