@@ -14,10 +14,10 @@
 
 """How mini-batches show up in a trace of the engine workers.
 
-A profiler step is one training step -- the whole RL cycle -- so the mini-batches the update loop
-divides the global batch into are annotated *inside* that step instead of advancing it. Advancing
-the profiler per mini-batch instead would put each of them in a window of its own, which is how
-traces used to end up holding update forward/backward passes and nothing else.
+The update loop names each iteration ``mini_batch<i>`` and advances the profiler once per
+mini-batch: a mini-batch is the unit a ``torch.profiler.schedule`` sub-samples the update loop by
+(see ``TorchProfilerScheduleConfig``). The forward-only stages (log-prob / ref / values) run their
+batches without advancing the profiler, so a schedule never sub-samples them.
 
 These tests drive the worker methods with mocked engines, so no GPU or ray is needed.
 """
@@ -91,8 +91,9 @@ def test_update_loop_names_each_mini_batch(monkeypatch):
     assert TrainingWorker.train_mini_batch(worker, data) is None
     # Numbered from the start of the step: without the index every iteration looks alike.
     assert names == ["mini_batch0", "mini_batch1", "mini_batch2"]
-    # A mini-batch is a row in the step, not a step of its own.
-    worker.profiler.step.assert_not_called()
+    # The profiler is advanced once per mini-batch -- the unit a torch.profiler.schedule
+    # sub-samples the update loop by.
+    assert worker.profiler.step.call_count == len(mini_batches)
 
 
 def test_forward_only_stage_is_not_a_profiler_step():

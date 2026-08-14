@@ -303,16 +303,31 @@ class Profiler(DistProfiler):
     def _resolve_continuous_schedule_kwargs(self) -> Optional[dict]:
         """Schedule for the single continuous trace, or None to record the whole step.
 
-        The continuous trace also holds the stages that run before the update loop (log-prob
-        forwards, rollout). torch only persists a recorded window that ends in RECORD_AND_SAVE,
-        so waiting/warming up on the mini-batches would drop those earlier stages too. We
-        therefore honor only ``active``: record from the start (keeping every earlier stage) and
-        stop after the first ``active`` update mini-batches.
+        The schedule picks which update mini-batches land in the trace. ``skip_first``/``wait``/
+        ``warmup`` are honored, so pointing it at a later mini-batch (e.g. ``skip_first: 1`` to
+        capture the second one) records exactly that mini-batch instead of always starting from the
+        first -- ``step()`` is advanced once per mini-batch, so a window boundary always falls
+        between mini-batches and the captured ones stay intact.
+
+        The cost of skipping ahead is that the stages before the active window -- the log-prob
+        forwards and rollout that run before the update loop -- are not kept either, because torch
+        only persists a window that ends in RECORD_AND_SAVE. Leaving ``skip_first``/``wait``/
+        ``warmup`` at 0 (the default) records from the top of the step, so every earlier stage is
+        kept in full plus the first ``active`` update mini-batches, exactly as before.
+
+        ``repeat`` defaults to a single window so one step does not emit a file per cycle; set it
+        explicitly to capture more than one active window within the step.
         """
         full = self._resolve_schedule_kwargs()
         if full is None:
             return None
-        return {"skip_first": 0, "wait": 0, "warmup": 0, "active": full["active"], "repeat": 1}
+        return {
+            "skip_first": full["skip_first"],
+            "wait": full["wait"],
+            "warmup": full["warmup"],
+            "active": full["active"],
+            "repeat": full["repeat"] or 1,
+        }
 
     def start(self, **kwargs):
         role = kwargs.get("role", None)
@@ -332,10 +347,16 @@ class Profiler(DistProfiler):
                 schedule=self._schedule_kwargs,
             )
             if self._schedule_kwargs:
-                print(
-                    f"[Profiler] started for rank {self.rank}: keeping every stage in full plus the "
-                    f"first {self._schedule_kwargs['active']} update mini-batch(es)"
-                )
+                sk = self._schedule_kwargs
+                skipped = sk["skip_first"] + sk["wait"] + sk["warmup"]
+                if skipped:
+                    scope = (
+                        f"capturing {sk['active']} update mini-batch(es) after the first {skipped} "
+                        f"(earlier stages before that window are not kept)"
+                    )
+                else:
+                    scope = f"keeping every stage in full plus the first {sk['active']} update mini-batch(es)"
+                print(f"[Profiler] started for rank {self.rank}: {scope}")
             else:
                 print(f"[Profiler] started for rank {self.rank}")
             self.prof.start()

@@ -39,7 +39,7 @@ You can customize the PyTorch Profiler behavior using the following fields under
     *   **`stack`**: Record source code file and line number.
 * **`profile_token_start`**: Effective only for the rollout role; defines the start response-token index for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
 * **`profile_token_end`**: Effective only for the rollout role; defines the stop response-token index (exclusive) for rollout decoding collection. It is applied only when valid (0-based, `profile_token_end > profile_token_start`, and within response length).
-* **`schedule`**: Optional [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) over the **update loop's mini-batches**, so an update stage with many identical mini-batches does not bloat its trace. `verl` advances it once per update mini-batch; the log-prob forwards and rollout are never sub-sampled. Enabled only when `active > 0`. In **continuous mode** (`discrete: False`) only `active` is honored: every earlier stage stays full and the first `active` update mini-batches are kept. In **`discrete: True` mode** the full `skip_first`/`wait`/`warmup`/`active`/`repeat` applies to the isolated update stage. It never emits torch's `ProfilerStep#<n>` rows. See [Scheduling the update loop's mini-batches](#3-scheduling-the-update-loops-mini-batches).
+* **`schedule`**: Optional [`torch.profiler.schedule`](https://pytorch.org/docs/stable/profiler.html#torch.profiler.schedule) over the **update loop's mini-batches**, so an update stage with many identical mini-batches does not bloat its trace. `verl` advances it once per update mini-batch; the log-prob forwards and rollout are never sub-sampled. Enabled only when `active > 0`. The full `skip_first`/`wait`/`warmup`/`active`/`repeat` selects which update mini-batches are captured in both modes. In **continuous mode** (`discrete: False`) skipping ahead to a later mini-batch also drops the earlier stages (rollout, log-prob) from that one shared trace; leave `skip_first`/`wait`/`warmup` at 0 to keep them. In **`discrete: True` mode** the update stage is isolated in its own trace, so the other stages keep their own full traces regardless. It never emits torch's `ProfilerStep#<n>` rows. See [Scheduling the update loop's mini-batches](#3-scheduling-the-update-loops-mini-batches).
 
 
 ## Examples
@@ -165,16 +165,18 @@ mini-batch annotated inside it:
 
 When the update loop has many identical mini-batches, recording all of them bloats the trace.
 `tool_config.torch.schedule` sub-samples them: it only ever narrows the update stage's mini-batches
-(the log-prob and rollout stages are always kept in full) and is active only when `active > 0`.
-`verl` drives it by calling `prof.step()` once per update mini-batch. It never writes torch's
-`ProfilerStep#<n>` rows -- a step() here is a single mini-batch, not a meaningful RL step, so those
-rows would only add noise. What the schedule sub-samples depends on `discrete`:
+(`prof.step()` is advanced there only, never on the log-prob forwards or rollout) and is active only
+when `active > 0`. It never writes torch's `ProfilerStep#<n>` rows -- a step() here is a single
+mini-batch, not a meaningful RL step, so those rows would only add noise. What the schedule
+sub-samples depends on `discrete`:
 
-* **`discrete: False`** (one continuous trace per process). The single profiler also holds the
-  stages that run before the update loop (rollout, log-prob forwards), and torch only persists a
-  window that ends in `RECORD_AND_SAVE` -- so waiting/warming up on the mini-batches would drop
-  those earlier stages too. The continuous trace therefore honors only `active`: it records from the
-  start (keeping every earlier stage in full) and stops after the first `active` update
+* **`discrete: False`** (one continuous trace per process). The schedule selects which update
+  mini-batches are kept: `skip_first`/`wait`/`warmup` skip ahead to a later mini-batch and `active`
+  sets how many are recorded. Because `step()` is advanced once per mini-batch, a window boundary
+  always lands between mini-batches, so the captured ones stay intact. The catch is that torch only
+  persists a window ending in `RECORD_AND_SAVE`, so skipping ahead also drops the rollout/log-prob
+  stages that run before the active window. Leave `skip_first`/`wait`/`warmup` at 0 (the default) to
+  record from the start, keeping every earlier stage in full plus the first `active` update
   mini-batches. Leave the schedule unset (or `active: 0`) to keep every mini-batch.
 
   ```yaml
@@ -185,9 +187,10 @@ rows would only add noise. What the schedule sub-samples depends on `discrete`:
         all_ranks: True
         tool_config:
           torch:
-            discrete: False   # rollout + every log-prob stage + first `active` mini-batches, one trace
+            discrete: False   # one continuous trace per process
             schedule:
-              active: 2       # keep every earlier stage in full, plus mini_batch0..1 of the update loop
+              active: 1       # keep every earlier stage in full, plus mini_batch0 of the update loop
+              # skip_first: 1 # ...or skip ahead: capture only mini_batch1 (earlier stages dropped)
   ```
 
 * **`discrete: True`** (one trace per stage). The update stage is profiled in isolation, so the
@@ -214,9 +217,11 @@ rows would only add noise. What the schedule sub-samples depends on `discrete`:
   ```
 
 Either way the trace carries no `ProfilerStep#<n>` rows: navigate it by the stage rows and the
-`mini_batch<i>` rows inside the update loop. In `discrete: False` a schedule keeps only the first
-`active` update mini-batches (all earlier stages stay full); leave it unset to keep them all. With
-`global_profiler.profile_continuous_steps: True` a run of consecutive profiled steps shares one file.
+`mini_batch<i>` rows inside the update loop. In `discrete: False` a schedule keeps `active` update
+mini-batches starting at the one `skip_first`/`wait`/`warmup` point to (skipping ahead drops the
+earlier stages); leave those at 0 to keep every earlier stage in full, or unset the schedule to keep
+every mini-batch. With `global_profiler.profile_continuous_steps: True` a run of consecutive profiled
+steps shares one file.
 
 If a step's trace is too large to be workable, narrow it with `discrete: True` (one file per stage)
 and sub-sample its update loop with `schedule`, or profile fewer ranks (`ranks`/`all_ranks`).
@@ -299,13 +304,15 @@ Seeing a single `actor...` file per rank, with no separate reference/critic file
 * **The role may not exist.** There is no critic unless the algorithm uses a value model (GRPO
   and friends do not), and no reference model unless a KL term needs one.
 * **A schedule can only sub-sample the update loop, never the log-prob forwards.**
-  `tool_config.torch.schedule` narrows the update stage's mini-batches only. In `discrete: False`
-  verl honors just the schedule's `active`: it records from the start so every earlier stage
-  (rollout, log-prob) is kept, and drops `skip_first`/`wait`/`warmup` there precisely so they cannot
-  push the recorded window past those stages. In `discrete: True` the schedule applies only to the
-  isolated update stage, and the log-prob/rollout stages keep their own full traces. So if a
-  continuous trace shows only update forward/backward and no log-prob forwards, it is not the
-  schedule: check that a log-prob stage actually ran (e.g. that a reference model exists) and that
+  `tool_config.torch.schedule` narrows the update stage's mini-batches only (`step()` is advanced
+  there). In `discrete: False` it selects which update mini-batches to keep: with
+  `skip_first`/`wait`/`warmup` at 0 it records from the start so every earlier stage (rollout,
+  log-prob) is kept, but skipping ahead to a later mini-batch drops those earlier stages (torch only
+  persists a window ending in `RECORD_AND_SAVE`). In `discrete: True` the schedule applies only to
+  the isolated update stage, and the log-prob/rollout stages keep their own full traces. So if a
+  continuous trace shows only update forward/backward and no log-prob forwards, check first whether
+  the schedule skipped ahead; otherwise confirm a log-prob stage actually ran (e.g. that a reference
+  model exists) and that
   CPU activity was collected (see the next bullet).
 * **Traces collected before CPU activity became unconditional.** A device-only run
   (`contents: [cuda]` on an older verl) has no `record_function` ranges and no operator names, so

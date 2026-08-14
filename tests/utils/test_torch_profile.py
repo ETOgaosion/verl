@@ -323,9 +323,9 @@ class TestTorchProfile(unittest.TestCase):
 
         self.assertIsNot(prof.record_steps, False)
 
-    def test_continuous_schedule_keeps_only_active(self):
-        # In continuous mode the trace also holds the stages that run before the update loop, so the
-        # schedule must not skip/wait/warmup (that would drop them); only `active` is honored.
+    def test_continuous_schedule_follows_the_full_schedule(self):
+        # In continuous mode the schedule selects which update mini-batch is captured, so
+        # skip_first/wait/warmup are honored (an explicit repeat is kept as-is).
         tool_config = TorchProfilerToolConfig(
             contents=["cpu"],
             discrete=False,
@@ -336,12 +336,28 @@ class TestTorchProfile(unittest.TestCase):
 
         self.assertEqual(
             profiler._resolve_continuous_schedule_kwargs(),
-            {"skip_first": 0, "wait": 0, "warmup": 0, "active": 2, "repeat": 1},
+            {"skip_first": 3, "wait": 2, "warmup": 1, "active": 2, "repeat": 5},
         )
-        # The full schedule (used for the discrete update stage) keeps every field.
+        # The full schedule (used for the discrete update stage) matches.
         self.assertEqual(
             profiler._resolve_schedule_kwargs(),
             {"skip_first": 3, "wait": 2, "warmup": 1, "active": 2, "repeat": 5},
+        )
+
+    def test_continuous_schedule_defaults_record_from_start(self):
+        # With skip_first/wait/warmup left at 0, recording still starts at the top of the step
+        # (keeping the earlier stages in full) and repeat is capped to a single window per step.
+        tool_config = TorchProfilerToolConfig(
+            contents=["cpu"],
+            discrete=False,
+            schedule=TorchProfilerScheduleConfig(active=2),
+        )
+        config = ProfilerConfig(save_path="/tmp/test", enable=True, tool_config=tool_config)
+        profiler = Profiler(rank=0, config=config, tool_config=tool_config)
+
+        self.assertEqual(
+            profiler._resolve_continuous_schedule_kwargs(),
+            {"skip_first": 0, "wait": 0, "warmup": 0, "active": 2, "repeat": 1},
         )
 
     def test_schedule_disabled_when_active_not_positive(self):

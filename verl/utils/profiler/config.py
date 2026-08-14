@@ -55,26 +55,28 @@ class TorchProfilerScheduleConfig(BaseConfig):
       only the ``active`` window is kept. The other stages (log-prob, rollout, ref) each get
       their own full trace, untouched by the schedule.
     * ``discrete: False`` -- everything the worker runs in the step shares one continuous trace.
-      The log-prob/rollout stages run before the first mini-batch, and torch can only persist a
-      recorded window that ends in ``RECORD_AND_SAVE``, so dropping the leading mini-batches would
-      also discard those earlier stages. Only ``active`` is honored here: the trace keeps every
-      other stage in full plus the first ``active`` update mini-batches; ``skip_first``/``wait``/
-      ``warmup``/``repeat`` are ignored. Use ``discrete: True`` when you need those.
+      The schedule still selects which update mini-batches are kept: ``skip_first``/``wait``/
+      ``warmup`` skip ahead to a later mini-batch and ``active`` sets how many are recorded. Because
+      torch only persists a window that ends in ``RECORD_AND_SAVE``, skipping ahead also drops the
+      log-prob/rollout stages that run before the active window. Leave ``skip_first``/``wait``/
+      ``warmup`` at 0 (the default) to keep every earlier stage in full plus the first ``active``
+      mini-batches. ``repeat`` defaults to a single window per step.
 
     Either way the schedule never writes torch's ``ProfilerStep#<n>`` rows: verl advances the
     profiler once per mini-batch (not per RL step), so those rows would tag mini-batch boundaries
     and only add noise. The sub-sampling still happens; the boundary labels are just turned off.
     """
 
-    # Number of steps to skip at the very beginning (not counted in the cycle). discrete only.
+    # Number of mini-batches to skip at the very beginning (not counted in the cycle).
     skip_first: int = 0
-    # Number of steps to idle (no collection) at the start of each cycle. discrete only.
+    # Number of mini-batches to idle (no collection) at the start of each cycle.
     wait: int = 0
-    # Number of steps to warm up (tracing on, data discarded) each cycle. discrete only.
+    # Number of mini-batches to warm up (tracing on, data discarded) each cycle.
     warmup: int = 0
     # Number of mini-batches to actively record each cycle. <= 0 disables scheduling (record all).
     active: int = 0
-    # Number of cycles to repeat. 0 means repeat until profiling stops. discrete only.
+    # Number of cycles to repeat. 0 means repeat until profiling stops (continuous mode caps this
+    # at a single window per step unless set explicitly).
     repeat: int = 0
     name: str = "torch_schedule"
 
@@ -100,9 +102,10 @@ class TorchProfilerToolConfig(BaseConfig):
     each stage and each update mini-batch annotated inside it.
 
     ``schedule`` optionally sub-samples the update loop's mini-batches, so a step with many
-    identical mini-batches does not bloat the trace. It is scoped to the update loop only --
-    the log-prob and rollout stages are always kept in full -- and its exact effect depends on
-    ``discrete`` (see :class:`TorchProfilerScheduleConfig`).
+    identical mini-batches does not bloat the trace. Only the update loop is sub-sampled
+    (``profiler.step()`` is advanced there only); whether the earlier log-prob/rollout stages
+    survive depends on ``discrete`` and on how far the schedule skips ahead
+    (see :class:`TorchProfilerScheduleConfig`).
     """
 
     # options: cuda, cpu, memory, shapes, stack. Empty means collect everything.
