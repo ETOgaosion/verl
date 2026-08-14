@@ -139,11 +139,14 @@ When Rollout runs in [Agent Loop](../advance/agent_loop.rst) mode, performance d
    -- e.g. with `tp=2`, `ranks: [0, 8]` puts just `rollout-replica0-globalrank0_...` and
    `rollout-replica4-globalrank8_...` in `save_path`. The tp-mates the engine also traced (global
    GPUs 1 and 9 here) are left in the per-replica sub-directory, so `save_path` shows exactly the
-   ranks you asked for. The engine's own file name usually carries the per-GPU tensor-parallel rank
-   (the `rank<k>` suffix); when it does not, the global rank cannot be determined, so the trace is
-   kept (never dropped) and named just `rollout-replica<n>_<engine's own file name>`. The rollout
-   engine does not run `finish_hook_cmd` itself: the colocated training worker's single end-of-run
-   upload of `save_path` (which now includes these relocated traces) is what moves them off the node.
+   ranks you asked for. This works by reading the per-GPU tensor-parallel rank out of the engine's
+   own file name -- vLLM writes `...-rank-<k>...` and SGLang writes `...-TP-<k>...`. When that rank
+   cannot be read unambiguously -- an engine that names traces by host/pid, or SGLang using extra
+   parallel dimensions (`-DP-`/`-PP-`/`-EP-`), where a GPU's linear offset is layout-dependent -- the
+   trace is kept (never dropped) and named just `rollout-replica<n>_<engine's own file name>`, so you
+   may see the replica's other GPUs too. The rollout engine does not run `finish_hook_cmd` itself:
+   the colocated training worker's single end-of-run upload of `save_path` (which now includes these
+   relocated traces) is what moves them off the node.
 
 ### 3. Scheduling the update loop's mini-batches
 

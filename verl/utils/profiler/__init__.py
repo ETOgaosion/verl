@@ -20,6 +20,7 @@ from .config import (
     relocate_rollout_traces,
     rollout_profiler_global_ranks,
     rollout_trace_dir,
+    rollout_trace_local_rank,
 )
 from .performance import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
 from .profile import DistProfiler, DistProfilerExtension, ProfilerConfig, build_rollout_dist_profiler
@@ -50,4 +51,5 @@ __all__ = [
     "rollout_trace_dir",
     "relocate_rollout_traces",
     "rollout_profiler_global_ranks",
+    "rollout_trace_local_rank",
 ]

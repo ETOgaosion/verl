@@ -351,6 +351,40 @@ def rollout_profiler_global_ranks(profiler_config: Optional["ProfilerConfig"]) -
     return ranks or None
 
 
+# The engines name one trace file per GPU and encode that GPU's tensor-parallel rank in the name:
+# vLLM uses ``...-rank-<tp>...`` (or ``...rank<tp>...``) and SGLang uses ``...-TP-<tp>...``.
+_ROLLOUT_TRACE_TP_RANK_RES = (
+    re.compile(r"(?:^|[-_.])TP-(\d+)", re.IGNORECASE),
+    re.compile(r"(?:^|[-_.])rank[-_]?(\d+)", re.IGNORECASE),
+)
+# SGLang only appends these when the corresponding parallel size is > 1; their presence means the
+# GPU's linear index within the replica is not just the tp rank, and we do not guess the layout.
+_ROLLOUT_TRACE_MULTI_DIM_RE = re.compile(r"(?:^|[-_.])(?:DP|PP|EP)-\d+", re.IGNORECASE)
+
+
+def rollout_trace_local_rank(name: str, world_size: int) -> Optional[int]:
+    """The GPU's linear rank within its replica (``0..world_size-1``), read from an engine trace
+    file name, or ``None`` when it cannot be determined unambiguously.
+
+    A rollout replica spans ``world_size`` GPUs and its engine writes one trace per GPU, naming it by
+    tensor-parallel rank (vLLM ``...-rank-<tp>...``, SGLang ``...-TP-<tp>...``). For a tp-only replica
+    that tp rank is exactly the GPU's offset within the replica, so ``global_rank = base + this``.
+    When the name carries other parallel dimensions (SGLang ``-DP-``/``-PP-``/``-EP-``) the linear
+    offset is layout-dependent, so ``None`` is returned rather than risk a wrong mapping; engines that
+    name traces by host/pid (older vLLM) likewise yield ``None``. Callers treat ``None`` as "keep".
+    """
+    if world_size <= 1:
+        return None
+    if _ROLLOUT_TRACE_MULTI_DIM_RE.search(name):
+        return None
+    for pattern in _ROLLOUT_TRACE_TP_RANK_RES:
+        match = pattern.search(name)
+        if match:
+            local_rank = int(match.group(1))
+            return local_rank if 0 <= local_rank < world_size else None
+    return None
+
+
 def relocate_rollout_traces(
     profiler_config: ProfilerConfig,
     rank: int,
@@ -367,13 +401,14 @@ def relocate_rollout_traces(
     since it is no longer in the path.
 
     ``world_size`` is the number of GPUs the replica spans (``tp * dp * pp``). A replica drives one
-    engine, which writes one trace per GPU and (for the supported engines) encodes that GPU's
-    tensor-parallel rank in the file name (e.g. ``...rank1...``). When ``world_size > 1`` and that
-    tp rank can be read, the file's absolute global GPU rank (``rank * world_size + tp_rank``) is
-    added to the relocated name so the flattened files line up with the global ``ranks`` the user
-    configured -- e.g. with ``tp=2`` replica 4's tp rank 0 becomes ``rollout-replica4-globalrank8_...``.
-    When the tp rank is not encoded in the name (or ``world_size <= 1``, where the replica index is
-    already the global rank) only the replica index is used.
+    engine, which writes one trace per GPU and encodes that GPU's tensor-parallel rank in the file
+    name (vLLM ``...-rank-<tp>...``, SGLang ``...-TP-<tp>...``; see :func:`rollout_trace_local_rank`).
+    When ``world_size > 1`` and that tp rank can be read, the file's absolute global GPU rank
+    (``rank * world_size + tp_rank``) is added to the relocated name so the flattened files line up
+    with the global ``ranks`` the user configured -- e.g. with ``tp=2`` replica 4's tp rank 0 becomes
+    ``rollout-replica4-globalrank8_...``. When the tp rank is not encoded in the name (or
+    ``world_size <= 1``, where the replica index is already the global rank) only the replica index
+    is used.
 
     ``keep_global_ranks`` is the exact set of global GPU ranks the user asked to profile. A ``tp>1``
     engine has to profile its whole replica (there is no way to profile a subset of a tensor-parallel
@@ -400,12 +435,10 @@ def relocate_rollout_traces(
     relocated = []
     for name in sorted(os.listdir(src_dir)):
         prefix = f"rollout-replica{rank}_"
-        global_rank = None
-        if world_size and world_size > 1:
-            tp_match = re.search(r"rank[_-]?(\d+)", name)
-            if tp_match and int(tp_match.group(1)) < world_size:
-                global_rank = base_global_rank + int(tp_match.group(1))
-                prefix = f"rollout-replica{rank}-globalrank{global_rank}_"
+        local_rank = rollout_trace_local_rank(name, world_size) if world_size else None
+        global_rank = base_global_rank + local_rank if local_rank is not None else None
+        if global_rank is not None:
+            prefix = f"rollout-replica{rank}-globalrank{global_rank}_"
         # Keep only the GPUs the user asked for; a tp>1 engine also traced its other ranks, but those
         # are left in the sub-directory rather than surfaced. Unknown ranks are kept, never dropped.
         if keep is not None and global_rank is not None and global_rank not in keep:

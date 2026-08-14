@@ -28,6 +28,7 @@ from verl.utils.profiler.config import (
     relocate_rollout_traces,
     rollout_profiler_global_ranks,
     rollout_trace_dir,
+    rollout_trace_local_rank,
 )
 from verl.utils.profiler.profile import DistProfiler, build_rollout_dist_profiler
 
@@ -269,6 +270,82 @@ class TestRolloutTraceRelocation(unittest.TestCase):
                 [os.path.basename(p) for p in relocated],
                 ["rollout-replica0_host_123.pt.trace.json.gz"],
             )
+
+    def test_sglang_tp_named_traces_are_filtered_to_the_requested_ranks(self):
+        # SGLang names per-GPU traces "{profile_id}-TP-{tp}.trace.json.gz". ranks=[0, 8] with tp=2
+        # must keep only TP-0 of replica 0 (global 0) and TP-0 of replica 4 (global 8).
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 0, "42-TP-0.trace.json.gz", "42-TP-1.trace.json.gz")
+            self._write_engine_traces(config, 4, "42-TP-0.trace.json.gz", "42-TP-1.trace.json.gz")
+
+            kept0 = relocate_rollout_traces(config, rank=0, world_size=2, keep_global_ranks={0, 8})
+            kept4 = relocate_rollout_traces(config, rank=4, world_size=2, keep_global_ranks={0, 8})
+
+            self.assertEqual(
+                [os.path.basename(p) for p in kept0],
+                ["rollout-replica0-globalrank0_42-TP-0.trace.json.gz"],
+            )
+            self.assertEqual(
+                [os.path.basename(p) for p in kept4],
+                ["rollout-replica4-globalrank8_42-TP-0.trace.json.gz"],
+            )
+
+    def test_vllm_instance_rank_named_traces_are_filtered_to_the_requested_ranks(self):
+        # vLLM names per-GPU traces "{instance_id}-rank-{tp}.{ts}.pt.trace.json.gz".
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(
+                config, 4, "inst9-rank-0.1700.pt.trace.json.gz", "inst9-rank-1.1700.pt.trace.json.gz"
+            )
+
+            kept = relocate_rollout_traces(config, rank=4, world_size=2, keep_global_ranks={0, 8})
+
+            self.assertEqual(
+                [os.path.basename(p) for p in kept],
+                ["rollout-replica4-globalrank8_inst9-rank-0.1700.pt.trace.json.gz"],
+            )
+
+    def test_multi_dim_parallel_names_are_kept_rather_than_mismapped(self):
+        # With DP/PP/EP in the name the GPU's linear offset is layout-dependent; do not guess, keep all.
+        with tempfile.TemporaryDirectory() as save_path:
+            config = self._config(save_path, relocate_results=True)
+            self._write_engine_traces(config, 0, "42-TP-0-DP-0.trace.json.gz", "42-TP-1-DP-1.trace.json.gz")
+
+            relocated = relocate_rollout_traces(config, rank=0, world_size=2, keep_global_ranks={0})
+
+            self.assertEqual(
+                sorted(os.path.basename(p) for p in relocated),
+                ["rollout-replica0_42-TP-0-DP-0.trace.json.gz", "rollout-replica0_42-TP-1-DP-1.trace.json.gz"],
+            )
+
+
+class TestRolloutTraceLocalRank(unittest.TestCase):
+    """`rollout_trace_local_rank` reads a GPU's offset within its replica from the engine file name."""
+
+    def test_reads_sglang_tp_rank(self):
+        self.assertEqual(rollout_trace_local_rank("42-TP-0.trace.json.gz", world_size=2), 0)
+        self.assertEqual(rollout_trace_local_rank("42-TP-1.trace.json.gz", world_size=2), 1)
+
+    def test_reads_vllm_instance_rank(self):
+        self.assertEqual(rollout_trace_local_rank("inst-rank-0.99.pt.trace.json.gz", world_size=4), 0)
+        self.assertEqual(rollout_trace_local_rank("inst-rank-3.99.pt.trace.json.gz", world_size=4), 3)
+
+    def test_reads_bare_rank_prefix(self):
+        self.assertEqual(rollout_trace_local_rank("rank0.pt.trace.json.gz", world_size=2), 0)
+
+    def test_multi_dim_layout_is_ambiguous(self):
+        self.assertIsNone(rollout_trace_local_rank("42-TP-0-DP-1.trace.json.gz", world_size=4))
+
+    def test_rank_out_of_range_is_rejected(self):
+        # A parsed value that cannot be a valid offset in this replica is not trusted.
+        self.assertIsNone(rollout_trace_local_rank("42-TP-9.trace.json.gz", world_size=2))
+
+    def test_host_pid_names_are_unknown(self):
+        self.assertIsNone(rollout_trace_local_rank("host_12345.170.pt.trace.json.gz", world_size=2))
+
+    def test_world_size_one_needs_no_offset(self):
+        self.assertIsNone(rollout_trace_local_rank("42-TP-0.trace.json.gz", world_size=1))
 
 
 class TestRolloutProfilerGlobalRanks(unittest.TestCase):
