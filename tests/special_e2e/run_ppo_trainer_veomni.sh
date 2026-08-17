@@ -14,14 +14,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FINISH_HOOK="$SCRIPT_DIR/profiler_finish_hook_marker.sh"
 
 # The finish hook is dispatched by every profiled worker when profiling stops, so a run with
-# profiling enabled must leave at least one marker behind.
+# profiling enabled must leave at least one marker behind. Markers live under finish_hook_markers/
+# (not $SAVE_PATH directly) so their role-derived names are not mistaken for profiler stage
+# deliverables by test_check_profiler_output.py (see profiler_finish_hook_marker.sh).
 assert_finish_hook_ran() {
-    if ! compgen -G "$SAVE_PATH/finish_hook_ran_*" > /dev/null; then
-        echo "global_profiler.finish_hook_cmd never ran: no marker file under $SAVE_PATH"
+    if ! compgen -G "$SAVE_PATH/finish_hook_markers/finish_hook_ran_*" > /dev/null; then
+        echo "global_profiler.finish_hook_cmd never ran: no marker file under $SAVE_PATH/finish_hook_markers"
         ls -la "$SAVE_PATH" || true
         exit 1
     fi
-    ls "$SAVE_PATH"/finish_hook_ran_*
+    ls "$SAVE_PATH"/finish_hook_markers/finish_hook_ran_*
 }
 
 # Download model if not exists
