@@ -58,12 +58,17 @@
 # GDRCopy source build, megatron-core's pybind11 extension and mbridge in
 # `prefetch`, all at emulation speed. If the only arm64 machine you have is
 # remote, attach it as a NATIVE buildx node and drive the build from x86_64 —
-# same command, no emulation:
+# same command, no emulation. `user@arm-host` below is a PLACEHOLDER: substitute
+# a resolvable arm64 host with Docker 18.09+ and key-based SSH, and check it
+# with `ssh <host> docker version` first.
 #
 #     docker buildx create --name verl-arm --driver docker-container \
 #         --platform linux/arm64 ssh://user@arm-host --use
 #     docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
 #         -t verl:uv-cu130-arm64 --load .
+#
+# See docker/README.md ("GB200 / aarch64") for the QEMU-only fallback when there
+# is no arm64 machine at all.
 #
 # The image carries the cache for EVERY backend; you pick the combination at
 # RUN time (not build time) by syncing it yourself. It must be conflict-free
@@ -83,9 +88,20 @@
 # Useful build args:
 #
 #     --build-arg CUDA_VERSION=13.0.2            # alternative CUDA dev base
+#     --build-arg CUDA_BASE_IMAGE=nvidia/cuda    # mirror of that base's repo
 #     --build-arg UBUNTU_MIRROR=...              # apt mirror (sglang-style)
 #     --build-arg PIP_DEFAULT_INDEX=...          # pip global index URL
 #     --build-arg GITHUB_ARTIFACTORY=github.com  # github mirror
+#
+# Behind an egress proxy, those mirrors cover the RUN steps but NOT the base
+# image pull: BuildKit resolves `FROM` itself, before any build arg is in play,
+# so `--build-arg https_proxy=...` has no effect on it. Give the builder the
+# proxy instead, and keep the build args for the RUN steps:
+#
+#     docker buildx create --name verl-proxy --driver docker-container --use \
+#         --driver-opt env.http_proxy=http://proxy:8118 \
+#         --driver-opt env.https_proxy=http://proxy:8118 \
+#         --driver-opt env.no_proxy=localhost,127.0.0.1
 #
 # Build with BuildKit. The `prefetch` stage bakes the uv cache into the image
 # (deliberately no cache mount), so the runtime `uv sync` is offline; the
@@ -93,7 +109,15 @@
 # See the "Install from the uv image" section in docs/start/install.rst.
 
 ARG CUDA_VERSION=13.0.2
-FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS base
+# Repository of the CUDA base image, so a site whose docker.io access is slow or
+# blocked can point at an internal Docker Hub mirror without editing this file
+# (--build-arg CUDA_BASE_IMAGE=<mirror>/nvidia/cuda). Note that resolving this
+# image is done by the BuildKit daemon, NOT by a build step, so `--build-arg
+# https_proxy=...` does not apply to it — a proxy for it has to be set on the
+# builder itself (`buildx create --driver-opt env.https_proxy=...`). A mirror
+# used for an arm64 build must carry the arm64 manifest.
+ARG CUDA_BASE_IMAGE=nvidia/cuda
+FROM ${CUDA_BASE_IMAGE}:${CUDA_VERSION}-devel-ubuntu24.04 AS base
 
 ARG CUDA_VERSION
 ARG TARGETARCH

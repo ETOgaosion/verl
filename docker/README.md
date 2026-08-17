@@ -56,12 +56,69 @@ docker build -f docker/Dockerfile.stable.vllm -t verl:vllm-arm64 .
 docker build -f docker/Dockerfile.uv.cu130 -t verl:uv-cu130-arm64 .   # uv image
 ```
 
-Cross-building from an x86_64 machine is possible but slow — `docker buildx build --platform linux/arm64` (after `docker run --privileged --rm tonistiigi/binfmt --install arm64`) runs the apt install, the GDRCopy build and the `prefetch` stage's `megatron-core` / `mbridge` source builds under QEMU. If your arm64 machine is remote, attach it as a *native* buildx node instead and drive the build from x86_64 with no emulation:
+Check `uname -m` first: on an `aarch64` host the plain `docker build` above is
+all you need, and everything below is irrelevant.
+
+From an `x86_64` host you have two options.
+
+**Remote arm64 machine, built natively (preferred).** Attach it as a buildx node
+and drive the build from x86_64 — no emulation. Replace `user@arm-host` with a
+real, resolvable arm64 host: this is a placeholder, and buildx reports a bare
+`Could not resolve hostname` if it is pasted verbatim. The node needs Docker
+18.09+, key-based SSH (buildx runs `ssh ... docker system dial-stdio`
+non-interactively, so a password prompt fails), and an SSH user in the `docker`
+group. Verify the connection before creating the builder:
 
 ```sh
+ssh user@arm-host docker version          # must succeed without a password
 docker buildx create --name verl-arm --driver docker-container \
     --platform linux/arm64 ssh://user@arm-host --use
 docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+    -t verl:uv-cu130-arm64 --load .
+```
+
+Note that `--platform` on `buildx create` only declares what the node
+advertises; it does not make an x86_64 node build arm64 natively.
+
+**No arm64 machine at all: QEMU emulation.** Works, but slow — the apt install,
+the GDRCopy build and the `prefetch` stage's `megatron-core` / `mbridge` source
+builds all run emulated:
+
+```sh
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx create --name verl-qemu --driver docker-container --use
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+    -t verl:uv-cu130-arm64 --load .
+```
+
+### Building behind an egress proxy
+
+`--build-arg http_proxy=...` reaches the `RUN` steps only. The base image in
+`FROM` is resolved by the BuildKit daemon itself — in the
+`buildx_buildkit_*` container, before any build arg applies — so a proxy passed
+that way cannot fix `failed to resolve source metadata for
+docker.io/nvidia/cuda:...`. Put the proxy on the **builder**, and keep the build
+args for the `RUN` steps:
+
+```sh
+docker buildx rm verl-qemu 2>/dev/null || true
+docker buildx create --name verl-qemu --driver docker-container --use \
+    --driver-opt env.http_proxy=http://proxy.example.com:8118 \
+    --driver-opt env.https_proxy=http://proxy.example.com:8118 \
+    --driver-opt env.no_proxy=localhost,127.0.0.1
+
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+    --build-arg http_proxy=http://proxy.example.com:8118 \
+    --build-arg https_proxy=http://proxy.example.com:8118 \
+    -t verl:uv-cu130-arm64 --load .
+```
+
+If Docker Hub stays unreachable, skip it entirely by pointing the base at an
+internal mirror (the mirror must carry the arm64 manifest for an arm64 build):
+
+```sh
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+    --build-arg CUDA_BASE_IMAGE=<mirror>/nvidia/cuda \
     -t verl:uv-cu130-arm64 --load .
 ```
 
