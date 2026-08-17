@@ -115,6 +115,18 @@ Docker image bakes only its backends. DEFERRED (commented out in
 pyproject.toml until they support torch-2.11 / cu130): the cu12.9 /
 torch-2.9.1 world (veomni, nemoautomodel) and trtllm (a CUDA-13 RC sdist).
 
+CPU architecture
+----------------
+The same lock covers **x86_64 and aarch64** Linux (GH200 / GB200), because
+``[tool.uv].environments`` declares a marker for each. Architecture is a
+*resolution* dimension, not an extra dimension: nothing below branches on it,
+the extra names and conflict sets are identical on both, and ``uv sync`` picks
+each wheel by the host's own platform tag. So every command in this module is
+spelled the same way on either machine — ``sync sglang megatron`` there is the
+same ``sync sglang megatron`` here. See the ``environments`` comment in
+pyproject.toml for how to split a single arch-specific package if one ever
+appears.
+
 Re-locking after a dependency change
 ------------------------------------
 Edit ``pyproject.toml`` (and the matching apt deb in
@@ -129,6 +141,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -177,6 +190,13 @@ CONFLICT_SETS: list[set[str]] = [
 # Single interpreter for the whole project (matches [tool.uv].environments,
 # which pins python_full_version >= '3.12').
 PYTHON_VERSION = "3.12"
+
+# CPU architectures [tool.uv].environments resolves the lock for. Arch is NOT an
+# extra dimension: the names above mean the same thing on both, and `uv sync`
+# picks each wheel by the host's own platform tag. Anything else has no slice in
+# uv.lock, so a sync there fails inside uv with a bare "no solution found" —
+# `list` reports the host arch up front instead (see cmd_list).
+SUPPORTED_ARCHES: tuple[str, ...] = ("x86_64", "aarch64")
 
 GROUPS: dict[str, list[str]] = {
     "all": ALL_EXTRAS,
@@ -635,6 +655,19 @@ def cmd_list(args: argparse.Namespace) -> int:
     print(f"  dev       (cpu/torch-2.11)   : {', '.join(DEV_BACKENDS)}")
     print(f"  addons    (any combo)        : {', '.join(ADDON_EXTRAS)}")
     print("  cu129     (torch-2.9.1)      : DEFERRED (veomni, nemoautomodel)")
+
+    # Both halves of the environment markers, so a wrong OS is reported as
+    # plainly as a wrong arch (macOS arm64 reports "arm64", not "aarch64").
+    host = f"{platform.system()} {platform.machine()}"
+    locked = sys.platform == "linux" and platform.machine() in SUPPORTED_ARCHES
+    print(
+        f"\nhost: {host} "
+        + (
+            "(covered by uv.lock; the extras above resolve here)"
+            if locked
+            else f"— NOT covered by uv.lock (Linux {' / '.join(SUPPORTED_ARCHES)} only), so `sync` will fail"
+        )
+    )
     print("\nmutually exclusive (at most one per `sync`):")
     for cs in CONFLICT_SETS:
         print("  {" + ", ".join(sorted(cs)) + "}")
@@ -797,7 +830,8 @@ def _build_parser() -> argparse.ArgumentParser:
     extras_help = (
         "extra name(s); shortcuts: all, inference (vllm sglang), "
         "training (fsdp megatron), dev (cpu), addons (math ci veomni-sft). "
-        "x86_64 Linux + Python 3.12 only. Add-ons are conflict-free and layer "
+        "Linux + Python 3.12, x86_64 or aarch64 (same extras on both). "
+        "Add-ons are conflict-free and layer "
         "on top of a backend combo. Mutually exclusive sets (at most one each per sync): "
         "{vllm, sglang, cpu}, {fsdp, cpu}, {megatron, cpu}. DEFERRED (see "
         "pyproject.toml): the cu12.9 world (veomni, nemoautomodel) and trtllm "

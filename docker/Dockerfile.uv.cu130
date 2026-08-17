@@ -22,9 +22,11 @@
 # `uv sync`s the requested extras from that baked cache (fast / offline) into a
 # single project venv at /workspace/verl/.venv (already on PATH). There is no
 # per-backend venv and no Ray py_executable switching — every role runs from
-# that one .venv. The uv flow is x86_64 Linux + Python 3.12 only — Ascend NPU
-# (vllm-ascend / sglang-ascend / mindspeed) and aarch64 GPU variants (e.g.
-# Grace-Blackwell) are out of scope; for Ascend see
+# that one .venv. The uv flow is Linux + Python 3.12 on x86_64 AND aarch64
+# (GH200 / GB200) — this one Dockerfile builds both, since every layer below
+# resolves its arch at build time and pyproject.toml's [tool.uv].environments
+# declares both, so the committed uv.lock carries both arches' wheels. Ascend NPU
+# (vllm-ascend / sglang-ascend / mindspeed) remains out of scope; see
 # `docker/ascend/Dockerfile.ascend_8.5.0_a2` and friends instead.
 #
 # The base layer is a superset of the "basic" stages of the upstream
@@ -41,6 +43,27 @@
 # committed uv.lock):
 #
 #     docker build -f docker/Dockerfile.uv.cu130 -t verl:uv-cu130 .
+#
+# nvidia/cuda:13.0.2-devel-ubuntu24.04 is a multi-arch manifest, so the same
+# command produces an x86_64 image on an x86_64 host and an aarch64 one on an
+# arm64 host:
+#
+#     docker build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+#         -t verl:uv-cu130-arm64 .
+#
+# Prefer running that on arm64 hardware. Nothing here blocks cross-building it
+# from x86_64 (buildx + binfmt: `docker run --privileged --rm tonistiigi/binfmt
+# --install arm64`, then a docker-container builder), but every expensive layer
+# is compute-bound and would run under QEMU: the ~60-package apt install, the
+# GDRCopy source build, megatron-core's pybind11 extension and mbridge in
+# `prefetch`, all at emulation speed. If the only arm64 machine you have is
+# remote, attach it as a NATIVE buildx node and drive the build from x86_64 —
+# same command, no emulation:
+#
+#     docker buildx create --name verl-arm --driver docker-container \
+#         --platform linux/arm64 ssh://user@arm-host --use
+#     docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+#         -t verl:uv-cu130-arm64 --load .
 #
 # The image carries the cache for EVERY backend; you pick the combination at
 # RUN time (not build time) by syncing it yourself. It must be conflict-free
@@ -366,10 +389,13 @@ CMD ["bash"]
 # runtime-env plugin, so the binary has to be on PATH; the CUDA base's own
 # /usr/local/cuda/bin/nsys is older and shadows the deb's /usr/local/bin/nsys,
 # so replace it. The symlink targets are the paths the deb's postinst registers
-# with update-alternatives (target-linux-x64/nsys, host-linux-x64/nsys-ui) —
-# `ln -s` happily creates dangling links, so the trailing `nsys --version`
-# fails the build loudly if that layout ever moves. apt resolves the deb's own
-# Qt / X11 dependencies (libxcb-cursor0 and friends) from the archive.
+# with update-alternatives; their directory carries the arch in its name
+# (target-linux-x64 / host-linux-x64 on amd64, target-linux-sbsa-armv8 /
+# host-linux-armv8 on arm64), so they are globbed rather than hardcoded — each
+# arch's deb ships exactly one match. `test -x` plus the trailing `nsys
+# --version` fail the build loudly if that layout ever moves (`ln -s` would
+# otherwise happily create a dangling link). apt resolves the deb's own Qt / X11
+# dependencies (libxcb-cursor0 and friends) from the archive.
 # ---------------------------------------------------------------------------
 ARG NSIGHT_VERSION=2025.6.1
 ARG NSIGHT_BUILD=2025.6.1.190-1
@@ -381,6 +407,10 @@ RUN NSIGHT_ARCH=$(if [ "$(uname -m)" = "aarch64" ]; then echo arm64; else echo a
     && apt-get update && apt-get install -y /tmp/${NSIGHT_DEB} \
     && rm -f /tmp/${NSIGHT_DEB} \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /opt/nvidia/nsight-systems/${NSIGHT_VERSION}/target-linux-x64/nsys /usr/local/cuda/bin/nsys \
-    && ln -sf /opt/nvidia/nsight-systems/${NSIGHT_VERSION}/host-linux-x64/nsys-ui /usr/local/cuda/bin/nsys-ui \
+    && NSIGHT_ROOT=/opt/nvidia/nsight-systems/${NSIGHT_VERSION} \
+    && NSYS_BIN="$(ls -1 ${NSIGHT_ROOT}/target-linux-*/nsys | head -n1)" \
+    && NSYS_UI="$(ls -1 ${NSIGHT_ROOT}/host-linux-*/nsys-ui | head -n1)" \
+    && test -x "${NSYS_BIN}" && test -x "${NSYS_UI}" \
+    && ln -sf "${NSYS_BIN}" /usr/local/cuda/bin/nsys \
+    && ln -sf "${NSYS_UI}" /usr/local/cuda/bin/nsys-ui \
     && nsys --version

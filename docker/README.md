@@ -49,19 +49,69 @@ docker build -f docker/Dockerfile.stable.vllm \
 
 ### GB200 / aarch64
 
-Pre-built images for GB200 (aarch64) are not yet published. Users should build locally on an aarch64 machine. Pre-built images will be added once available.
+Pre-built images for GB200 (aarch64) are not yet published. Users should build locally on an aarch64 machine. Pre-built images will be added once available. This applies to the uv image below too — it supports aarch64 from the same Dockerfile and the same `uv.lock`.
 
 ```sh
 docker build -f docker/Dockerfile.stable.vllm -t verl:vllm-arm64 .
+docker build -f docker/Dockerfile.uv.cu130 -t verl:uv-cu130-arm64 .   # uv image
 ```
+
+Cross-building from an x86_64 machine is possible but slow — `docker buildx build --platform linux/arm64` (after `docker run --privileged --rm tonistiigi/binfmt --install arm64`) runs the apt install, the GDRCopy build and the `prefetch` stage's `megatron-core` / `mbridge` source builds under QEMU. If your arm64 machine is remote, attach it as a *native* buildx node instead and drive the build from x86_64 with no emulation:
+
+```sh
+docker buildx create --name verl-arm --driver docker-container \
+    --platform linux/arm64 ssh://user@arm-host --use
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.uv.cu130 \
+    -t verl:uv-cu130-arm64 --load .
+```
+
+### One tag for both arches
+
+Both arches can and should share a single tag, published as a multi-arch
+manifest list — `docker pull verlai/verl:uv.cu130` then resolves to whichever
+arch the puller is on, and `FROM verlai/verl:uv.cu130` in a downstream image
+resolves per build platform. This is how `nvidia/cuda:13.0.2-devel-ubuntu24.04`
+itself works, and what lets one Dockerfile and one job spec cover both.
+
+If a single builder can reach both platforms (e.g. a native x86_64 node plus a
+native arm64 node in the same builder), one command does it:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 \
+    -f docker/Dockerfile.uv.cu130 -t verlai/verl:uv.cu130 --push .
+```
+
+More often the two builds happen on different machines at different times. Then
+push arch-suffixed tags and join them afterwards — the join is metadata only, so
+it is instant and re-runnable:
+
+```sh
+# on each host, natively:
+docker buildx build -f docker/Dockerfile.uv.cu130 -t verlai/verl:uv.cu130-amd64 --push .
+docker buildx build -f docker/Dockerfile.uv.cu130 -t verlai/verl:uv.cu130-arm64 --push .
+
+# then, from anywhere:
+docker buildx imagetools create -t verlai/verl:uv.cu130 \
+    verlai/verl:uv.cu130-amd64 verlai/verl:uv.cu130-arm64
+docker buildx imagetools inspect verlai/verl:uv.cu130   # verify both platforms
+```
+
+Three things to know:
+
+- A multi-platform build **must** `--push`; `--load` cannot put an index into
+  the local docker image store (load one arch at a time instead).
+- Add `--provenance=false` if your registry or runtime trips over the extra
+  `unknown/unknown` attestation entries buildx puts in the index by default.
+- Pin by **tag**, not digest, to keep the multi-arch behaviour — a digest names
+  one specific manifest, so `FROM ...@sha256:...` pins you to a single arch.
 
 ## uv image (`Dockerfile.uv.cu130`)
 
 `docker/Dockerfile.uv.cu130` builds one image around verl's universal
 `uv.lock` (GPU: CUDA 13.0 / torch 2.11 — vllm, sglang, fsdp, megatron — plus
-the GPU-free `cpu` slice). The build **bakes the full uv package cache for
-every backend** into the image (the `prefetch` stage); it does *not* bake a
-fixed `.venv`. Build with BuildKit:
+the GPU-free `cpu` slice), on x86_64 and aarch64 alike. The build **bakes the
+full uv package cache for every backend** into the image (the `prefetch`
+stage); it does *not* bake a fixed `.venv`. Build with BuildKit:
 
 ```sh
 DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.uv.cu130 -t verl:uv-cu130 .

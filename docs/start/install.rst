@@ -109,8 +109,13 @@ backends as **extras**:
 
 .. note::
 
-   The uv workflow targets **Linux x86_64 with Python 3.12**. For Ascend NPU,
-   AMD ROCm, or aarch64 GPUs, use the dedicated images / sections instead.
+   The uv workflow targets **Linux with Python 3.12, on x86_64 and aarch64**
+   (GH200 / GB200). Both arches are declared in ``[tool.uv].environments``, so
+   the committed ``uv.lock`` carries both and every command below is spelled
+   identically on either machine — ``uv sync`` picks each wheel by the host's
+   own platform tag. Architecture is never an extra: there is no
+   ``vllm-aarch64``, just ``vllm``. Ascend NPU and AMD ROCm remain outside the
+   uv workflow; use the dedicated images instead.
 
 .. note::
 
@@ -120,7 +125,10 @@ backends as **extras**:
    (`verl-project.github.io/verl-wheelhouse
    <https://verl-project.github.io/verl-wheelhouse/simple/>`_, wired in
    ``pyproject.toml`` under ``[tool.uv.index]`` / ``[tool.uv.sources]``); those
-   wheels are built for cu130 / torch 2.11 / CPython 3.12. The inference engines
+   wheels are built for cu130 / torch 2.11 / CPython 3.12, for ``linux_x86_64``
+   and ``linux_aarch64`` alike (the aarch64 builds target
+   ``TORCH_CUDA_ARCH_LIST`` ``9.0;10.0``, the only CUDA parts an arm64 host
+   has). The inference engines
    (``vllm``, ``sglang``, ``sglang-kernel``) come straight from PyPI, whose
    wheels for the pinned versions are already cu130 / torch-2.11 builds. Only the
    git-sourced ``megatron-core`` (``core_v0.18.0``, paired with
@@ -162,10 +170,14 @@ current ``.venv``.
 Other backends
 ::::::::::::::::
 
-Ascend NPU, AMD ROCm, aarch64 GPUs, and ``trtllm`` are outside the uv
-workflow. Use the standalone Dockerfiles instead — for example
-``docker/ascend/`` (Ascend), ``docker/rocm/Dockerfile.rocm`` (AMD), or
-``docker/Dockerfile.stable.trtllm`` (TensorRT-LLM).
+Ascend NPU, AMD ROCm and ``trtllm`` are outside the uv workflow. Use the
+standalone Dockerfiles instead — for example ``docker/ascend/`` (Ascend),
+``docker/rocm/Dockerfile.rocm`` (AMD), or ``docker/Dockerfile.stable.trtllm``
+(TensorRT-LLM).
+
+aarch64 GPUs are **not** in this list: they are a first-class part of the uv
+workflow, sharing the same extras and the same ``uv.lock`` as x86_64. Build
+``docker/Dockerfile.uv.cu130`` on an arm64 host and use it exactly as above.
 
 Upgrade or modify dependencies
 ::::::::::::::::::::::::::::::::::::
@@ -230,7 +242,7 @@ Pick a base image
    * - ``sglang``
      - ``lmsysorg/sglang:v0.5.12`` or ``nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04``
    * - ``cpu`` (CI / sanity)
-     - any x86_64 Linux host with Python 3.12; no GPU needed
+     - any x86_64 or aarch64 Linux host with Python 3.12; no GPU needed
 
 Set up and sync
 :::::::::::::::::::::::
@@ -350,12 +362,14 @@ Troubleshooting
   ``flash-attn``** — these are pulled prebuilt from the verl wheelhouse (see the
   note under *Install with uv*). It means the resolver found no matching wheel
   for your platform or the wheelhouse was unreachable; the uv flow supports only
-  cu130 / torch 2.11 / CPython 3.12 on Linux x86_64.
+  cu130 / torch 2.11 / CPython 3.12 on Linux x86_64 or aarch64.
 - **``No solution found`` for ``vllm`` / ``sglang`` / ``sglang-kernel``** — these
-  come from PyPI, which publishes them only for Linux x86_64 (and ``sglang``
-  only for glibc >= 2.34), so the same platform limits apply.
-- **``uv sync`` / ``uv lock`` fails on macOS** — the uv workflow is Linux
-  x86_64 only; use a Linux host or the Docker image.
+  come from PyPI, which publishes them for Linux x86_64 and aarch64 only (and
+  ``sglang`` only for glibc >= 2.34), so the same platform limits apply.
+- **``uv sync`` / ``uv lock`` fails on macOS** — the uv workflow is Linux only
+  (on either arch); use a Linux host or the Docker image. ``python
+  manage_envs.py list`` prints the host it detected and whether ``uv.lock``
+  covers it.
 - **Start over** — ``python manage_envs.py clean`` then sync again.
 
 Some system-level pieces are not handled by ``uv sync`` (the Dockerfiles set
