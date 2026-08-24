@@ -17,25 +17,32 @@
 verl uses **one** ``uv.lock`` for the whole project. Every backend is a PEP
 621 extra in ``pyproject.toml``; mutually exclusive ones are declared in
 ``[tool.uv].conflicts`` so a single ``uv lock`` resolves all of them into the
-one lockfile. At runtime you materialize exactly one conflict-free
-combination of extras into the project venv (``.venv``) and run everything —
-every Ray worker group — from it. There is no per-backend lockfile and no Ray
-``py_executable`` switching.
+one lockfile. A job materializes exactly one conflict-free combination of
+extras into the project venv (``.venv``) and runs everything — every Ray worker
+group — from it. There is no per-backend lockfile.
 
-Typical flow::
+**This driver is not on the normal path.** Ordinary runs need no install step
+and no sync: they go straight through ``uv run``, which materializes ``.venv``
+from the committed lock on first use, and Ray reaches the same environment via
+``runtime_env.py_executable`` (that is what the ``examples/`` scripts and CI
+do)::
+
+    uv run --frozen --all-packages --extra vllm --extra fsdp python3 -m verl.trainer.main_ppo ...
+
+Use this module for what ``uv run`` does not cover: regenerating ``uv.lock``,
+keeping several environments side by side (``--name``), an activated shell,
+protecting an in-house build (``VERL_UV_NO_INSTALL``), or baking a Docker
+image's cache (``prefetch``)::
 
     python manage_envs.py lock                       # (re)generate uv.lock
-    python manage_envs.py sync fsdp vllm             # build .venv for a run
+    python manage_envs.py sync fsdp vllm             # build .venv explicitly
     source .venv/bin/activate                        # or: manage_envs.py shell ...
-    python -m verl.trainer.main_ppo trainer.n_gpus_per_node=8 ...
-
-    # one-shot equivalent (uv resolves + runs from .venv):
     python manage_envs.py run fsdp vllm -- python -m verl.trainer.main_ppo ...
 
 Commands::
 
     lock                 # uv lock  -> regenerate the universal uv.lock
-    sync   <extras...>   # uv sync --extra ...  -> materialize .venv (runtime)
+    sync   <extras...>   # uv sync --extra ...  -> materialize .venv up front
     run    <extras...> -- <cmd...>   # uv run --extra ... -- <cmd>
     shell  <extras...>   # sync, then open a shell with .venv activated
     list                 # extras, conflict rules, .venv state, prefetch plan
@@ -82,8 +89,8 @@ own for this, which is why it lives here.)
 
 `sync` vs `prefetch`
 --------------------
-``sync`` is the **runtime** command: it installs one conflict-free extra
-combination into ``.venv`` so you can train/serve. ``prefetch`` is a
+``sync`` installs one conflict-free extra combination into ``.venv`` up front —
+the same thing a plain ``uv run`` does implicitly. ``prefetch`` is a
 **first-time / image-build** helper: it first resolves the universal
 ``uv.lock`` from ``pyproject.toml`` (``uv lock``), then downloads & builds
 *every* backend's dependencies into the uv cache (``$UV_CACHE_DIR``, default
@@ -91,15 +98,16 @@ combination into ``.venv`` so you can train/serve. ``prefetch`` is a
 conflict, ``prefetch`` cannot produce a single usable env — it syncs throwaway
 envs purely to populate the cache (passing ``--no-install-project`` so only
 dependencies are cached, not verl itself) and never creates or modifies
-``.venv``. The lock it produces is what every later ``sync`` consumes.
+``.venv``. The lock it produces is what every later ``uv run`` / ``sync``
+consumes.
 
 In Docker this is what makes one image serve any backend: bake ``prefetch``
 as a real layer (point ``UV_CACHE_DIR`` at an in-image path and do **not** use
 a ``--mount=type=cache``) so the cache ships *inside* the image. The container
-then picks its combination at run time — ``sync <extras...>`` builds ``.venv``
-from the baked cache, offline — instead of hard-coding one combo at build
-time. Do **not** use ``prefetch`` as a runtime sync; use ``sync <extras...>``
-for that.
+then picks its combination at run time — the first ``uv run --extra ...`` (or an
+explicit ``sync <extras...>``) builds ``.venv`` from the baked cache, offline —
+instead of hard-coding one combo at build time. Do **not** use ``prefetch`` as a
+runtime sync.
 
 This driver exposes one GPU torch "world" plus a CPU slice, all in one lock:
 the cu13.0 / torch-2.11 backends (vllm, sglang, fsdp, megatron) and the

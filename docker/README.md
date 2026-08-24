@@ -174,25 +174,27 @@ stage); it does *not* bake a fixed `.venv`. Build with BuildKit:
 DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.uv.cu130 -t verl:uv-cu130 .
 ```
 
-You pick the backend combination at **run** time (not build time) by syncing it
-yourself (it must be conflict-free; see `[tool.uv].conflicts`). The container
-starts in a shell — `manage_envs.py sync` `uv sync`s the requested extras into
-`/workspace/verl/.venv` from the baked cache (fast / offline), and that venv is
-already on `PATH`:
+You pick the backend combination at **run** time (not build time), and it must be
+conflict-free (see `[tool.uv].conflicts`). There is no install step: the
+container starts in a shell, and the first `uv run --extra ...` installs the
+requested extras into `/workspace/verl/.venv` from the baked cache (fast /
+offline) and runs from it — that venv is already on `PATH`:
 
 ```sh
 docker run --rm -it --gpus all verl:uv-cu130 bash
 # then, inside the container:
-python3 manage_envs.py sync sglang megatron -- --frozen
-python3 -m verl.trainer.main_ppo ...
+bash examples/grpo_trainer/run_qwen3_8b_fsdp.sh
+# ... or spell the command out:
+uv run --frozen --all-packages --extra sglang --extra megatron \
+    python3 -m verl.trainer.main_ppo ...
 ```
 
 Optional named stages: `--target=prefetch` builds just the baked cache (every
 backend, no source), and `--target=lock` regenerates `uv.lock`. A companion
 `docker/Dockerfile.uv.cu129` builds the cu12.9 / torch-2.9.1 backends (veomni,
 nemoautomodel) the same way; trtllm stays deferred. For the full story — the
-manual sync flow, the baked-cache mechanics, and re-locking — see the
-**"Install from the uv images"** section in
+launch flow, the baked-cache mechanics, and re-locking — see
+**"Install with uv"** in
 [`docs/start/install.rst`](../docs/start/install.rst).
 
 ## Installation from Docker

@@ -18,11 +18,14 @@
 # At build time we BAKE the full uv cache — every backend combination's wheels
 # & built artifacts, resolved from the committed uv.lock — into the image (the
 # `prefetch` stage). The image does NOT bake a fixed .venv. At container start
-# you materialize the combination you want with `manage_envs.py sync` — it
-# `uv sync`s the requested extras from that baked cache (fast / offline) into a
-# single project venv at /workspace/verl/.venv (already on PATH). There is no
-# per-backend venv and no Ray py_executable switching — every role runs from
-# that one .venv. The uv flow is Linux + Python 3.12 on x86_64 AND aarch64
+# there is no install step: `uv run --extra <engine> --extra <trainer>` (what the
+# examples/ scripts do) materializes the requested extras from that baked cache
+# (fast / offline) into the single project venv /workspace/verl/.venv, already on
+# PATH; `manage_envs.py sync` does the same up front if you want it before
+# launching. There is no per-backend venv — every role runs from that one .venv,
+# which Ray workers reach via runtime_env.py_executable.
+#
+# The uv flow is Linux + Python 3.12 on x86_64 AND aarch64
 # (GH200 / GB200) — this one Dockerfile builds both, since every layer below
 # resolves its arch at build time and pyproject.toml's [tool.uv].environments
 # declares both, so the committed uv.lock carries both arches' wheels. Ascend NPU
@@ -71,13 +74,15 @@
 # is no arm64 machine at all.
 #
 # The image carries the cache for EVERY backend; you pick the combination at
-# RUN time (not build time) by syncing it yourself. It must be conflict-free
-# (see [tool.uv].conflicts):
+# RUN time (not build time), and it must be conflict-free (see
+# [tool.uv].conflicts):
 #
 #     docker run --rm -it --gpus all verl:uv-cu130 bash
 #     # then, inside the container:
-#     python3 manage_envs.py sync sglang megatron -- --frozen
-#     python3 -m verl.trainer.main_ppo ...
+#     bash examples/grpo_trainer/run_qwen3_8b_fsdp.sh
+#     # ... or spell the command out:
+#     uv run --frozen --all-packages --extra sglang --extra megatron \
+#         python3 -m verl.trainer.main_ppo ...
 #
 # Optional named stages:
 #   * --target=prefetch : just the baked uv cache (every backend), no source.
@@ -104,9 +109,9 @@
 #         --driver-opt env.no_proxy=localhost,127.0.0.1
 #
 # Build with BuildKit. The `prefetch` stage bakes the uv cache into the image
-# (deliberately no cache mount), so the runtime `uv sync` is offline; the
+# (deliberately no cache mount), so the runtime sync is offline; the
 # `lock` and apt steps still use BuildKit cache mounts for faster rebuilds.
-# See the "Install from the uv image" section in docs/start/install.rst.
+# See the "Run from the uv Docker image" section in docs/start/install.rst.
 
 ARG CUDA_VERSION=13.0.2
 # Repository of the CUDA base image, so a site whose docker.io access is slow or
@@ -283,9 +288,9 @@ RUN ln -sf /usr/lib/$(uname -m)-linux-gnu/libmlx5.so.1 /usr/lib/$(uname -m)-linu
 
 # ---------------------------------------------------------------------------
 # uv — single static binary. We bake the full uv cache from the committed
-# uv.lock via manage_envs.py (the `prefetch` stage); at run time you sync the
-# combination you want into .venv from it with `manage_envs.py sync`. Put uv on
-# PATH and copy across the uv tunables that vllm sets.
+# uv.lock via manage_envs.py (the `prefetch` stage); at run time `uv run` (or an
+# explicit `manage_envs.py sync`) materializes the combination you want into
+# .venv from it. Put uv on PATH and copy across the uv tunables that vllm sets.
 # ---------------------------------------------------------------------------
 COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /uvx /bin/
 
@@ -340,7 +345,7 @@ RUN printf 'verl\n' > README.md
 # layer is independent of the verl source tree. NOTE: unlike every other uv
 # step there is deliberately NO `--mount=type=cache` here, so the warmed cache
 # is committed as an image layer and ships *inside* the image; the runtime
-# `uv sync` then resolves from it offline.
+# `uv run` / `uv sync` then resolves from it offline.
 # ---------------------------------------------------------------------------
 FROM deps AS prefetch
 RUN python3 manage_envs.py prefetch cu130 dev -- --frozen
@@ -365,18 +370,20 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=verl-uv-cache \
 # ---------------------------------------------------------------------------
 # final: the runtime image. Inherits the full baked uv cache from `prefetch`,
 # adds the verl source, and bakes NO fixed .venv. The container starts in a
-# shell; materialize the combination you want with `manage_envs.py sync` — it
-# `uv sync`s the requested extras into /workspace/verl/.venv from the baked
-# cache (fast / offline, no network). That venv's bin is already on PATH, so it
+# shell and needs no install step: `uv run --extra ...` installs the requested
+# extras into /workspace/verl/.venv from the baked cache (fast / offline, no
+# network) and runs from it, and that venv's bin is already on PATH so it
 # activates in place. The combination must be conflict-free (see
 # [tool.uv].conflicts), e.g.:
 #
 #     docker run --rm -it --gpus all verl:uv-cu130 bash
 #     # then, inside the container:
-#     python3 manage_envs.py sync sglang megatron -- --frozen
-#     python3 -m verl.trainer.main_ppo ...
+#     bash examples/grpo_trainer/run_qwen3_8b_fsdp.sh
+#     # ... or spell the command out:
+#     uv run --frozen --all-packages --extra sglang --extra megatron \
+#         python3 -m verl.trainer.main_ppo ...
 #
-# The cuDNN / NCCL pip wheels installed by that sync (nvidia-cudnn-cu13 /
+# The cuDNN / NCCL pip wheels this installs (nvidia-cudnn-cu13 /
 # nvidia-nccl-cu13, from torch's transitive pins) must match the apt debs above.
 # ---------------------------------------------------------------------------
 FROM prefetch AS final
