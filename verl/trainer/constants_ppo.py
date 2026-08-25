@@ -147,6 +147,10 @@ def get_ppo_ray_runtime_env(config=None):
         "FLASH_ATTENTION_DETERMINISTIC",
         "NCCL_DETERMINISTIC",
         "NCCL_ALGO",
+        # Ray workers do not inherit the driver's PYTHONPATH. Cluster interpreters
+        # (and Ray <2.38, which ignores runtime_env.py_executable) need it to
+        # import an editable/checkout `verl`. E2E scripts already rely on this.
+        "PYTHONPATH",
     ):
         val = os.environ.get(key)
         if val is not None:
