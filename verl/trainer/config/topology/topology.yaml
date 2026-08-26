@@ -1,0 +1,13 @@
+# Opt-in declarative placement (RFC #7269). Empty lists preserve legacy scheduling.
+# Runtime: v1 sync/colocate_async, hybrid engine, one homogeneous cluster, whole-node pools.
+# Actor/rollout/ref share a pool; an optional critic can have a separate pool.
+# Unsupported layouts raise before allocation. See docs/advance/device_topology.rst.
+
+# List of {name, nnodes, n_gpus_per_node}.
+clusters: []
+
+# List of {name, cluster, nnodes, n_gpus_per_node}.
+device_pools: []
+
+# List of {name, worker, resource_pool, config_key?}.
+models: []

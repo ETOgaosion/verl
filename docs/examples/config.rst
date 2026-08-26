@@ -653,6 +653,27 @@ https://excalidraw.com/#json=pfhkRmiLm1jnnRli9VFhb,Ut4E8peALlgAUpr7E5pPCA
 .. image:: https://github.com/user-attachments/assets/16aebad1-0da6-4eb3-806d-54a74e712c2d
 
 
+Device Topology (optional)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: yaml
+
+   topology:
+     clusters: []
+     device_pools: []
+     models: []
+
+- ``topology``: Optional declarative placement; empty lists keep legacy scheduling.
+- ``topology.clusters``: Homogeneous machine groups ``{name, nnodes, n_gpus_per_node}``.
+- ``topology.device_pools``: Named groups ``{name, cluster, nnodes, n_gpus_per_node}``.
+- ``topology.models``: Entries ``{name, worker, resource_pool, config_key?}``.
+  Runtime support initially covers one cluster and whole-node actor/rollout/ref
+  placement on a shared pool, plus an optional critic. Training dimensions derive
+  from the actor pool. Unsupported layouts raise an error before allocation.
+
+See :doc:`../advance/device_topology` for the full guide, scenarios and the startup report.
+
+
 evaluation.yaml
 ---------------
 

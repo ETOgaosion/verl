@@ -788,6 +788,24 @@ class PPOTrainer(ABC):
 
     def _init_resource_pool_mgr(self):
         config = self.config
+        from verl.trainer.ppo.topology_resolver import resolve_placement, topology_enabled
+
+        if topology_enabled(config):
+            resolved = resolve_placement(config)
+            self.role_worker_mapping = {resolved.actor_role: ray.remote(ActorRolloutRefWorker)}
+            if need_critic(config):
+                self.role_worker_mapping[Role.Critic] = ray.remote(TrainingWorker)
+            self.mapping = resolved.role_pool_mapping
+            actor_pool = resolved.topology.pools[resolved.topology.actor_pool()]
+            config.reward.reward_model.nnodes = actor_pool.nnodes
+            config.reward.reward_model.n_gpus_per_node = actor_pool.n_gpus_per_node
+            self.resource_pool_manager = ResourcePoolManager(
+                resource_pool_spec=resolved.resource_pool_spec, mapping=self.mapping
+            )
+            self.cluster_topology = resolved.topology
+            self._log_topology_report()
+            return
+
         # role => worker class
         self.role_worker_mapping = {}
         # role => resource pool
@@ -847,6 +865,17 @@ class PPOTrainer(ABC):
             self.mapping[Role.TeacherModel] = "teacher_pool"
 
         self.resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=self.mapping)
+        from verl.trainer.ppo.topology_resolver import build_legacy_topology
+
+        try:
+            self.cluster_topology = build_legacy_topology(config, resource_pool_spec, self.mapping)
+            self._log_topology_report()
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("Could not describe legacy topology: %s", exc)
+
+    def _log_topology_report(self):
+        """Describe logical placement; Ray assigns the physical GPU devices."""
+        logger.info("Logical device topology (Ray assigns physical devices):\n%s", self.cluster_topology.describe())
 
     def _load_checkpoint(self):
         self.global_steps = 0

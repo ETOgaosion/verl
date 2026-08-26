@@ -177,6 +177,10 @@ def main(config):
     # Automatically set `config.trainer.device = npu` when running on Ascend NPU.
     auto_set_device(config)
 
+    from verl.trainer.ppo.topology_resolver import reconcile_trainer_dims_with_topology
+
+    reconcile_trainer_dims_with_topology(config)
+
     # validate config
     validate_config(
         config=config,
