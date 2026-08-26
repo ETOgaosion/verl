@@ -127,6 +127,7 @@ under `recipe/` instead.
 |----------------------|------------------------------------------------------------------------------------------|
 | `tuning/`            | LoRA (`tuning/lora/`) and scaling demos (`tuning/scaling/`).                             |
 | `profile/`           | NPU profiler / torch-memory profiler runs.                                               |
+| `topology/`          | Declarative device topology (RFC #7269): opt-in `topology=` placement of roles on GPUs.  |
 | `sft/`               | Supervised fine-tuning examples.                                                         |
 | `generation/`        | Rollout-only inference launches.                                                         |
 | `vllm_omni/`         | vLLM omni backend examples.                                                              |

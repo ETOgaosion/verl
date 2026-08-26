@@ -91,8 +91,6 @@ TRAINER=(
     trainer.logger='["console","wandb"]'
     trainer.project_name=${project_name}
     trainer.experiment_name=${experiment_name}
-    trainer.n_gpus_per_node=${NGPUS_PER_NODE}
-    trainer.nnodes=${NNODES}
     trainer.save_freq=${save_freq}
     trainer.test_freq=${test_freq}
     trainer.total_epochs=${total_epochs}
@@ -100,6 +98,23 @@ TRAINER=(
 
 EXTRA=(
     model_engine=megatron
+)
+
+# Declarative device topology (RFC #7269): you declare `topology` directly (no preset to select) and
+# the trainer INFERS the rollout mode. actor+rollout+ref share (config_key: actor_rollout_ref,
+# resource_pool: hybrid_pool) so they fuse into one process and rollout derives HYBRID; the pool spans
+# all GPUs (NNODES x NGPUS_PER_NODE; TP/PP stay in the actor/rollout configs). trainer.nnodes /
+# n_gpus_per_node are derived from the cluster (setting them by hand alongside `topology` is
+# deprecated), so they are omitted from TRAINER above. The trainer logs a "Resolved topology" report
+# at startup. To use the legacy path instead, drop TOPOLOGY and add trainer.nnodes=${NNODES}
+# trainer.n_gpus_per_node=${NGPUS_PER_NODE} to TRAINER.
+TOPOLOGY=(
+    "topology.clusters=[{name: default, nnodes: ${NNODES}, n_gpus_per_node: ${NGPUS_PER_NODE}}]"
+    "topology.device_pools=[{name: hybrid_pool, cluster: default, nnodes: ${NNODES}, n_gpus_per_node: ${NGPUS_PER_NODE}}]"
+    "topology.models=[\
+        {name: actor, worker: actor, config_key: actor_rollout_ref, resource_pool: hybrid_pool}, \
+        {name: rollout, worker: rollout, config_key: actor_rollout_ref, resource_pool: hybrid_pool}, \
+        {name: ref, worker: ref, config_key: actor_rollout_ref, resource_pool: hybrid_pool}]"
 )
 
 ########################### launch ###########################
@@ -119,6 +134,7 @@ fi
     "${ROLLOUT[@]}" \
     "${REF[@]}" \
     "${TRAINER[@]}" \
+    "${TOPOLOGY[@]}" \
     "${EXTRA[@]}" \
     "${RAY[@]}" \
     "$@"

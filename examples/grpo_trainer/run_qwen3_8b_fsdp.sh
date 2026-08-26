@@ -178,11 +178,25 @@ TRAINER=(
     trainer.logger='["console","wandb"]'
     trainer.project_name=${PROJECT_NAME}
     trainer.experiment_name=${EXPERIMENT_NAME}
-    trainer.n_gpus_per_node=${n_trainer_devices}
-    trainer.nnodes=${NNODES}
     trainer.save_freq=${save_freq}
     trainer.test_freq=${test_freq}
     trainer.total_epochs=${total_epochs}
+)
+
+# Declarative device topology (RFC #7269): you declare `topology` directly (no preset to select) and
+# the trainer INFERS the rollout mode. actor+rollout+ref share (config_key: actor_rollout_ref,
+# resource_pool: hybrid_pool) so they fuse into one process and rollout derives HYBRID; the pool spans
+# all GPUs (NNODES x per-node devices). trainer.nnodes / n_gpus_per_node are derived from the cluster
+# (setting them by hand alongside `topology` is deprecated), so they are omitted from TRAINER above.
+# The trainer logs a "Resolved topology" report at startup. To use the legacy path instead, drop
+# TOPOLOGY and add trainer.nnodes=${NNODES} trainer.n_gpus_per_node=${n_trainer_devices} to TRAINER.
+TOPOLOGY=(
+    "topology.clusters=[{name: default, nnodes: ${NNODES}, n_gpus_per_node: ${n_trainer_devices}}]"
+    "topology.device_pools=[{name: hybrid_pool, cluster: default, nnodes: ${NNODES}, n_gpus_per_node: ${n_trainer_devices}}]"
+    "topology.models=[\
+        {name: actor, worker: actor, config_key: actor_rollout_ref, resource_pool: hybrid_pool}, \
+        {name: rollout, worker: rollout, config_key: actor_rollout_ref, resource_pool: hybrid_pool}, \
+        {name: ref, worker: ref, config_key: actor_rollout_ref, resource_pool: hybrid_pool}]"
 )
 
 ########################### launch ###########################
@@ -202,6 +216,7 @@ fi
     "${ROLLOUT[@]}" \
     "${REF[@]}" \
     "${TRAINER[@]}" \
+    "${TOPOLOGY[@]}" \
     "${EXTRA[@]}" \
     "${RAY[@]}" \
     "$@"

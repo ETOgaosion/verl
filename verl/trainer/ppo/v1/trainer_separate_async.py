@@ -70,13 +70,11 @@ class PPOTrainerSeparateAsync(PPOTrainer):
 
     def _init_resource_pool_mgr(self):
         super()._init_resource_pool_mgr()
-        # Replace ActorRolloutRefWorker with DetachActorWorker to get CPU save/restore
-        # capability needed for Decoupled PPO when parameter_sync_step > 1.
-        # The base class adds exactly one of ActorRolloutRef or ActorRollout to the mapping.
-        if Role.ActorRolloutRef in self.role_worker_mapping:
-            self.role_worker_mapping[Role.ActorRolloutRef] = ray.remote(DetachActorWorker)
-        elif Role.ActorRollout in self.role_worker_mapping:
-            self.role_worker_mapping[Role.ActorRollout] = ray.remote(DetachActorWorker)
+        # Replace the atomic ActorWorker with DetachActorWorker to get the CPU save/restore
+        # capability needed for Decoupled PPO when parameter_sync_step > 1. The rollout / ref split
+        # workers stay as the base class built them, colocated with the actor.
+        if Role.Actor in self.role_worker_mapping:
+            self.role_worker_mapping[Role.Actor] = ray.remote(DetachActorWorker)
 
     def _setup(self):
         super()._setup()
@@ -92,7 +90,7 @@ class PPOTrainerSeparateAsync(PPOTrainer):
         checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
         self.standalone_checkpoint_manager = CheckpointEngineManager(
             config=checkpoint_engine_config,
-            actor_wg=self.actor_rollout_wg,
+            actor_wg=self.actor_wg,
             replicas=self.standalone_server_manager.get_replicas(),
         )
 
@@ -116,14 +114,14 @@ class PPOTrainerSeparateAsync(PPOTrainer):
             return super()._compute_old_log_prob(batch, metrics)
 
         if self.local_trigger_step == 0:
-            self.actor_rollout_wg.save_model_to_cpu(0)
+            self.actor_wg.save_model_to_cpu(0)
             return super()._compute_old_log_prob(batch, metrics)
         else:
-            self.actor_rollout_wg.save_model_to_cpu(self.local_trigger_step)
-            self.actor_rollout_wg.restore_model_from_cpu(0)
+            self.actor_wg.save_model_to_cpu(self.local_trigger_step)
+            self.actor_wg.restore_model_from_cpu(0)
             result = super()._compute_old_log_prob(batch, metrics)
-            self.actor_rollout_wg.restore_model_from_cpu(self.local_trigger_step)
-            self.actor_rollout_wg.clear_cpu_model(self.local_trigger_step)
+            self.actor_wg.restore_model_from_cpu(self.local_trigger_step)
+            self.actor_wg.clear_cpu_model(self.local_trigger_step)
             return result
 
     def get_llm_client(self):

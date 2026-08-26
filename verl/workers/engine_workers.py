@@ -830,3 +830,423 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         """
         return getattr(self.checkpoint_engine, method)(*args, **kwargs)
+
+
+# =====================================================================================
+# Split (atomic) RL workers (RFC #7269, section 2.4)
+#
+# ``ActorRolloutRefWorker`` above is the legacy *fused* worker that multiplexes actor +
+# rollout + ref in one class and branches on substrings of ``self.role``. The classes below
+# split it into one worker per model, all sharing :class:`EngineWorker`, so the topology
+# placement builder can create one worker-group handle per declared model
+# (``actor_wg`` / ``rollout_wg`` / ``ref_wg``). When several are colocated in a single
+# ``WorkerDict`` (HYBRID), they reach each other in-process via ``fused_worker_dict``; the
+# actor drives the direct weight sync into its rollout peer. Disaggregated (STANDALONE)
+# rollout goes through the checkpoint engine and needs no peer.
+# =====================================================================================
+class EngineWorker(Worker, DistProfilerExtension):
+    """Common base for the atomic RL workers (actor / rollout / ref).
+
+    Owns the shared, role-agnostic wiring: config handles, the per-role
+    :class:`DistProfiler` (trace filenames are prefixed by role), and the routing-replay
+    flag (read from the actor engine config, which every RL run has). Subclasses set
+    :attr:`worker_role` and build exactly one capability in ``init_model``.
+    """
+
+    #: single capability this worker hosts; one of ``"actor"`` / ``"rollout"`` / ``"ref"``.
+    worker_role: str = ""
+
+    def __init__(self, config: DictConfig, distillation_config: Optional[DistillationConfig] = None, **kwargs):
+        Worker.__init__(self)
+        assert self.worker_role in ("actor", "rollout", "ref"), (
+            f"{type(self).__name__} must set worker_role to actor/rollout/ref, got {self.worker_role!r}"
+        )
+        self.config = config
+        self.role = self.worker_role
+        self.distillation_config = distillation_config
+        self.distillation_enabled = is_distillation_enabled(distillation_config)
+
+        # Per-role profiler config source (mirrors the fused worker). In colocation mode the
+        # rollout config may follow the actor config; this is kept for AsyncRL extendability.
+        if self.role == "actor":
+            omega_profiler_config = config.actor.get("profiler", {})
+        elif self.role == "rollout":
+            omega_profiler_config = config.rollout.get("profiler", {})
+        else:
+            omega_profiler_config = config.ref.get("profiler", {})
+
+        profiler_config = omega_conf_to_dataclass(omega_profiler_config, dataclass_type=ProfilerConfig)
+        if omega_profiler_config.get("tool", None) in ["npu", "nsys", "torch", "torch_memory", "precision_debugger"]:
+            tool_config = omega_conf_to_dataclass(
+                omega_profiler_config.get("tool_config", {}).get(omega_profiler_config.get("tool"))
+            )
+        else:
+            tool_config = None
+
+        # Router replay is supported on the megatron and veomni engines; both expose
+        # `router_replay` on their per-strategy engine config.
+        actor_strategy = self.config.actor.strategy
+        if actor_strategy == "megatron":
+            rr_mode = self.config.actor.megatron.router_replay.mode
+        elif actor_strategy == "veomni":
+            rr_mode = self.config.actor.veomni.router_replay.mode
+        else:
+            rr_mode = "disabled"
+        self.enable_routing_replay = rr_mode != "disabled"
+
+        # Keep the raw (un-dataclassed) role profiler config so an inner TrainingWorker can
+        # build a matching DistProfiler in init_model (via the hydra path, so tool_config
+        # entries are real dataclasses the torch profiler can consume).
+        self._omega_profiler_config = omega_profiler_config
+
+        DistProfilerExtension.__init__(
+            self,
+            DistProfiler(
+                rank=self.rank,
+                config=profiler_config,
+                tool_config=tool_config,
+                # Embed the worker role in trace filenames so per-process results are
+                # distinguishable across roles and ranks.
+                save_file_prefix=self.role,
+            ),
+        )
+
+
+class ActorWorker(EngineWorker):
+    """Trainable policy worker: owns the training engine + checkpoint engine.
+
+    Hosts log-prob inference, the PPO update, checkpoint I/O, and drives weight sync into the
+    rollout. For HYBRID it reaches its colocated :class:`RolloutWorker` peer via
+    ``fused_worker_dict`` and pushes weights in-process; for disaggregated (STANDALONE)
+    deployments it sends weights through the checkpoint engine (no peer needed).
+    """
+
+    worker_role = "actor"
+    actor_worker_cls = TrainingWorker
+
+    def __init__(self, config: DictConfig, distillation_config: Optional[DistillationConfig] = None, **kwargs):
+        super().__init__(config=config, distillation_config=distillation_config, **kwargs)
+        self.actor: TrainingWorker | None = None
+        self.checkpoint_engine = None
+        self.loss_fn = None
+        # LoRA weight-sync state (owned here because update_weights lives here).
+        self.base_sync_done: bool = True
+        self.layered_summon: bool = False
+        self.peft_merge: bool = False
+
+    def _rollout_peer(self) -> Optional["RolloutWorker"]:
+        """Return the colocated rollout sibling (HYBRID), matched by type, or None."""
+        for worker in (getattr(self, self.fused_worker_attr_name, None) or {}).values():
+            if isinstance(worker, RolloutWorker):
+                return worker
+        return None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def set_loss_fn(self, loss_fn):
+        self.actor.set_loss_fn(loss_fn=loss_fn)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def to(self, device, model=True, optimizer=True, grad=True):
+        """Manual control of load/offload"""
+        self.actor.to(device=device, model=model, optimizer=optimizer, grad=grad)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def init_model(self):
+        model_config: HFModelConfig = omega_conf_to_dataclass(self.config.model)
+
+        actor_config: ActorConfig = omega_conf_to_dataclass(self.config.actor)
+        actor_config.model_config = model_config
+        distillation_config: Optional[DistillationConfig] = (
+            omega_conf_to_dataclass(self.distillation_config) if self.distillation_enabled else None
+        )
+
+        # Build the inner actor profiler config via the hydra path so its tool_config entries
+        # are real dataclass instances the (process-global) torch profiler can read.
+        actor_profiler_config = (
+            omega_conf_to_dataclass(self._omega_profiler_config) if self._omega_profiler_config else None
+        )
+
+        actor_training_config = TrainingWorkerConfig(
+            model_type=actor_config.model_config.get("model_type", "language_model"),
+            model_config=actor_config.model_config,
+            engine_config=actor_config.engine,
+            optimizer_config=actor_config.optim,
+            checkpoint_config=actor_config.checkpoint,
+            profiler_config=actor_profiler_config,
+        )
+
+        assert self.config.actor.use_dynamic_bsz == self.config.rollout.log_prob_use_dynamic_bsz
+
+        actor_training_config.engine_config.use_dynamic_bsz = self.config.actor.use_dynamic_bsz
+        actor_training_config.engine_config.infer_max_token_len_per_gpu = (
+            self.config.rollout.log_prob_max_token_len_per_gpu
+        )
+        actor_training_config.engine_config.infer_micro_batch_size_per_gpu = (
+            self.config.rollout.log_prob_micro_batch_size_per_gpu
+        )
+        actor_training_config.engine_config.max_token_len_per_gpu = self.config.actor.ppo_max_token_len_per_gpu
+        actor_training_config.engine_config.micro_batch_size_per_gpu = self.config.actor.ppo_micro_batch_size_per_gpu
+        actor_training_config.engine_config.use_remove_padding = model_config.get("use_remove_padding", False)
+
+        if self.config.actor.use_dynamic_bsz:
+            assert self.config.rollout.log_prob_max_token_len_per_gpu is not None
+            assert self.config.actor.ppo_max_token_len_per_gpu is not None
+        else:
+            assert self.config.rollout.log_prob_micro_batch_size_per_gpu is not None
+            assert self.config.actor.ppo_micro_batch_size_per_gpu is not None
+
+        if self.distillation_enabled:
+            self.loss_fn = partial(distillation_ppo_loss, config=actor_config, distillation_config=distillation_config)
+        else:
+            self.loss_fn = partial(ppo_loss, config=actor_config)
+
+        self.actor = self.actor_worker_cls(config=actor_training_config)
+        self.actor.reset()
+        self.actor.set_loss_fn(self.loss_fn)
+        self.set_dispatch_collect(mesh_name="actor", **self.actor.get_dispatch_collect())
+
+        # LoRA weight-sync state (used by update_weights).
+        self.base_sync_done = "dummy" not in self.config.rollout.load_format
+        self.layered_summon = self.config.rollout.get("layered_summon", False)
+        self.peft_merge = model_config.lora.get("merge", False)
+
+        # checkpoint engine (owns the send side of async weight transfer)
+        checkpoint_engine_config = omega_conf_to_dataclass(self.config.rollout.checkpoint_engine)
+        backend = checkpoint_engine_config.backend
+        bucket_size = checkpoint_engine_config.update_weights_bucket_megabytes << 20
+        engine_kwargs = checkpoint_engine_config.engine_kwargs.get(backend, {})
+        import_external_libs(checkpoint_engine_config.custom_backend_module or None)
+        self.checkpoint_engine = CheckpointEngineRegistry.new(
+            backend, is_master=(torch.distributed.get_rank() == 0), bucket_size=bucket_size, **engine_kwargs
+        )
+
+        # Free cached GPU memory so colocated vLLM processes can see it via cudaMemGetInfo.
+        aggressive_empty_cache(force_sync=True)
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+    @DistProfiler.annotate(color="blue", role="actor_compute_log_prob")
+    @_with_routing_replay_flag(enabled=True)
+    def compute_log_prob(self, data: TensorDict) -> TensorDict:
+        output = self.actor.infer_batch(data)
+        return output.cpu() if output is not None else None
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+    # scheduled=True: this stage iterates over update mini-batches, so in discrete mode its trace
+    # is the one a torch.profiler.schedule sub-samples (other stages stay full).
+    @DistProfiler.annotate(color="red", role="actor_update", scheduled=True)
+    @_with_routing_replay_flag(enabled=True)
+    def update_actor(self, data: TensorDict) -> TensorDict:
+        output = self.actor.train_mini_batch(data=data)
+        return output.cpu() if output is not None else None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=False):
+        self.actor.load_checkpoint(local_path, hdfs_path, del_local_after_load)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def save_checkpoint(self, local_path, hdfs_path=None, global_step=0, max_ckpt_to_keep=None):
+        self.actor.save_checkpoint(local_path, hdfs_path, global_step, max_ckpt_to_keep)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
+    async def update_weights(self, global_steps: int = None, mode: str = "auto"):
+        """Update weights from the training engine to the rollout.
+
+        1. Sync training (colocated trainer + rollout): push weights directly into the rollout
+           peer (must be in sleep mode before, wake mode after).
+        2. Async training (disaggregated): ``send_weights`` via the checkpoint engine only.
+
+        LoRA handling: when ``model.lora.merge=True`` (peft_merge), LoRA is merged into base
+        weights before sync; the engine returns full HF-keyed params with peft_config=None.
+
+        Args:
+            global_steps: Current global training step, passed to rollout for logging/tracking.
+            mode: ``"auto"`` resolves to ``config.rollout.checkpoint_engine.backend``; ``"naive"``
+                is the direct in-process sync into the colocated rollout peer; any other value
+                delegates to :meth:`checkpoint_engine.send_weights` for disaggregated transfer.
+        """
+        # Resolve mode: "auto" falls back to config, explicit values take precedence.
+        effective_mode = mode if mode != "auto" else self.config.rollout.checkpoint_engine.backend
+
+        # 0. send_weights only for async training with disaggregated trainer and rollout
+        if effective_mode != "naive":
+            if effective_mode == "delta_sharded":
+                # the delta engine owns the sync state machine (seed vs steady, snapshot prime),
+                # so it drives the training engine itself.
+                metrics = await self.checkpoint_engine.send_weights(self.actor.engine, global_steps=global_steps)
+                return metrics or {}
+            per_tensor_param, _ = self.actor.engine.get_per_tensor_param()
+            metrics = await self.checkpoint_engine.send_weights(per_tensor_param, global_steps=global_steps)
+            return metrics or {}
+
+        rollout_worker = self._rollout_peer()
+        assert rollout_worker is not None and rollout_worker.rollout is not None, (
+            "naive weight sync requires a colocated rollout peer (HYBRID); none found in this WorkerDict"
+        )
+        rollout = rollout_worker.rollout
+
+        set_expandable_segments(False)
+        aggressive_empty_cache(force_sync=True)
+        log_gpu_memory_usage("Before resume weights", logger=logger)
+
+        # 1. resume rollout memory (weights were released during sleep)
+        # sleep_level=1 (adapter mode) in SGLang never released weights, so do not resume them.
+        # vLLM is different: its level-1 sleep goes through CuMemAllocator.sleep(offload_tags=("weights",))
+        is_sglang = self.config.rollout.get("name", "") == "sglang"
+        if is_sglang:
+            resume_weights = self.config.rollout.free_cache_engine and getattr(rollout, "sleep_level", 2) != 1
+        else:
+            # vLLM: level-1 sleep still unmaps weights → must resume.
+            resume_weights = self.config.rollout.free_cache_engine
+        if resume_weights:
+            await rollout.resume(tags=["weights"])
+        log_gpu_memory_usage("After resume weights", logger=logger)
+
+        # 2. determine if we need a base weight sync (adapter path only)
+        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(
+            layered_summon=self.layered_summon, base_sync_done=True
+        )
+
+        do_lora_base_sync = False
+        if not self.peft_merge and peft_config is not None:
+            rollout.sleep_level = 1
+            do_lora_base_sync = not self.base_sync_done
+
+        # 3. sync weights: For SGLang, we need base first (when needed), then adapter/merged
+        if do_lora_base_sync:
+            per_tensor_param_base, _base_peft_config = self.actor.engine.get_per_tensor_param(
+                layered_summon=self.layered_summon, base_sync_done=False
+            )
+            await rollout.update_weights(
+                per_tensor_param_base, peft_config=_base_peft_config, base_sync_done=False, global_steps=global_steps
+            )
+
+        await rollout.update_weights(
+            per_tensor_param, peft_config=peft_config, base_sync_done=True, global_steps=global_steps
+        )
+
+        log_gpu_memory_usage("After update_weights", logger=logger)
+
+        # 3. offload model to cpu
+        if self.actor.engine.is_param_offload_enabled:
+            self.actor.engine.to("cpu", model=True, optimizer=False, grad=False)
+        aggressive_empty_cache(force_sync=True)
+
+        # 4. resume kv_cache
+        if self.config.rollout.free_cache_engine:
+            await rollout.resume(tags=["kv_cache"])
+        log_gpu_memory_usage("After resume kv_cache", logger=logger)
+
+        self.base_sync_done = True
+        set_expandable_segments(True)
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE, blocking=False)
+    def execute_checkpoint_engine(self, method: str, *args, **kwargs):
+        """Execute checkpoint engine method.
+
+        Args:
+            method (str): Checkpoint engine method name.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
+        return getattr(self.checkpoint_engine, method)(*args, **kwargs)
+
+
+class RefWorker(EngineWorker):
+    """Reference-policy worker: a frozen model used only for reference log-probs."""
+
+    worker_role = "ref"
+    ref_worker_cls = TrainingWorker
+
+    def __init__(self, config: DictConfig, distillation_config: Optional[DistillationConfig] = None, **kwargs):
+        super().__init__(config=config, distillation_config=distillation_config, **kwargs)
+        self.ref: TrainingWorker | None = None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def init_model(self):
+        model_config: HFModelConfig = omega_conf_to_dataclass(self.config.model)
+
+        # TODO: align ref config with actor config
+        with open_dict(self.config.ref):
+            self.config.ref.ppo_mini_batch_size = self.config.actor.ppo_mini_batch_size
+            self.config.ref.ppo_micro_batch_size = self.config.ref.pop("log_prob_micro_batch_size", None)
+            self.config.ref.ppo_micro_batch_size_per_gpu = self.config.ref.pop(
+                "log_prob_micro_batch_size_per_gpu", None
+            )
+            self.config.ref.use_dynamic_bsz = self.config.ref.pop("log_prob_use_dynamic_bsz", False)
+            self.config.ref.ppo_max_token_len_per_gpu = self.config.ref.pop("log_prob_max_token_len_per_gpu", None)
+        ref_config: ActorConfig = omega_conf_to_dataclass(self.config.ref)
+
+        # The ref model does not need to enable MTP; force it to false.
+        ref_config.model_config = deepcopy(model_config)
+        ref_config.model_config.mtp = MtpConfig(enable=False)
+
+        # Build the inner ref profiler config via the hydra path (same as the actor / SFT), so
+        # the reference TrainingWorker gets a working DistProfiler (nsys/npu/torch) instead of a
+        # silent no-op.
+        ref_omega_profiler_config = self.config.ref.get("profiler", {})
+        ref_profiler_config = omega_conf_to_dataclass(ref_omega_profiler_config) if ref_omega_profiler_config else None
+
+        ref_training_config = TrainingWorkerConfig(
+            model_type=ref_config.model_config.get("model_type", "language_model"),
+            model_config=ref_config.model_config,
+            engine_config=ref_config.engine,
+            optimizer_config=ref_config.optim,
+            checkpoint_config=ref_config.checkpoint,
+            profiler_config=ref_profiler_config,
+        )
+
+        ref_training_config.engine_config.use_dynamic_bsz = self.config.ref.use_dynamic_bsz
+        ref_training_config.engine_config.infer_max_token_len_per_gpu = self.config.ref.ppo_max_token_len_per_gpu
+        ref_training_config.engine_config.infer_micro_batch_size_per_gpu = self.config.ref.ppo_micro_batch_size_per_gpu
+        ref_training_config.engine_config.use_remove_padding = model_config.get("use_remove_padding", False)
+
+        self.ref = self.ref_worker_cls(config=ref_training_config)
+        self.ref.reset()
+        self.set_dispatch_collect(mesh_name="ref", **self.ref.get_dispatch_collect())
+
+        aggressive_empty_cache(force_sync=True)
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="ref"))
+    @DistProfiler.annotate(color="olive", role="ref_compute_log_prob")
+    @_with_routing_replay_flag(enabled=False)
+    def compute_ref_log_prob(self, data: TensorDict) -> TensorDict:
+        output = self.ref.infer_batch(data=data)
+        return output.cpu() if output is not None else None
+
+
+class RolloutWorker(EngineWorker):
+    """Inference (rollout) worker: hosts the generation engine / server.
+
+    Weight sync is driven by the :class:`ActorWorker` peer (HYBRID, via ``fused_worker_dict``)
+    or by the checkpoint engine (STANDALONE); this worker only exposes the rollout engine.
+    """
+
+    worker_role = "rollout"
+
+    def __init__(self, config: DictConfig, distillation_config: Optional[DistillationConfig] = None, **kwargs):
+        super().__init__(config=config, distillation_config=distillation_config, **kwargs)
+        self.rollout: BaseRollout = None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def init_model(self):
+        model_config: HFModelConfig = omega_conf_to_dataclass(self.config.model)
+        rollout_config: RolloutConfig = omega_conf_to_dataclass(self.config.rollout)
+
+        # TODO: move rollout_device_mesh into ServerAdapter
+        # build rollout device mesh (sglang need only)
+        infer_tp = rollout_config.tensor_model_parallel_size * rollout_config.data_parallel_size
+        infer_pp = rollout_config.pipeline_model_parallel_size
+        infer_world_size = infer_tp * infer_pp
+        dp = self.world_size // infer_world_size
+        assert self.world_size % infer_world_size == 0, (
+            f"rollout world_size: {self.world_size} is not divisible by infer_world_size: {infer_world_size}"
+        )
+        rollout_device_mesh = init_device_mesh(
+            get_device_name(), mesh_shape=(dp, infer_tp, infer_pp), mesh_dim_names=["dp", "infer_tp", "infer_pp"]
+        )
+
+        rollout_cls: type[BaseRollout] = get_rollout_class(rollout_config.name, rollout_config.mode)
+        self.rollout = rollout_cls(config=rollout_config, model_config=model_config, device_mesh=rollout_device_mesh)
+
+        # Free cached GPU memory so colocated vLLM processes can see it via cudaMemGetInfo.
+        aggressive_empty_cache(force_sync=True)

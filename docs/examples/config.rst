@@ -643,6 +643,36 @@ https://excalidraw.com/#json=pfhkRmiLm1jnnRli9VFhb,Ut4E8peALlgAUpr7E5pPCA
 .. image:: https://github.com/user-attachments/assets/16aebad1-0da6-4eb3-806d-54a74e712c2d
 
 
+Device Topology (optional)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: yaml
+
+   topology:
+     clusters: []
+     device_pools: []
+     models: []
+
+- ``topology``: An opt-in declarative block for placing models on GPUs (which cluster/GPU
+  runs which model), including heterogeneous hardware. It ships empty, and empty means the
+  legacy knobs above (``trainer.*``, ``reward.reward_model.*``, ``distillation.*``) drive
+  placement, so existing configs are unchanged.
+- ``topology.clusters``: List of homogeneous machine groups ``{name, nnodes,
+  n_gpus_per_node}``. The ``name`` doubles as the Ray custom resource that pins those
+  machines. With a single GPU type name it ``default``.
+- ``topology.device_pools``: List of ``{name, cluster, nnodes, n_gpus_per_node,
+  attributes?}``. A pool is sized ``nnodes * n_gpus_per_node`` and allocated node-by-node in
+  declaration order, so pools within a cluster are disjoint.
+- ``topology.models``: List of ``{name, worker, config_key, resource_pool, device_range?}`` —
+  one model instance each. Models sharing a ``(config_key, resource_pool)`` fuse into one
+  worker process; ``RolloutMode`` (hybrid/colocated/standalone) is derived from GPU overlap
+  with the actor, never hand-written. When ``topology`` is set, ``trainer.nnodes`` /
+  ``n_gpus_per_node`` are derived from a single-cluster topology (setting them by hand is
+  deprecated).
+
+See :doc:`../advance/device_topology` for the full guide, scenarios and the startup report.
+
+
 evaluation.yaml
 ---------------
 

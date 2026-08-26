@@ -30,6 +30,27 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 
+def _user_set_trainer_dims() -> tuple[str, ...]:
+    """Which of ('nnodes', 'n_gpus_per_node') the user set via Hydra CLI overrides.
+
+    Used only to phrase the ``topology`` deprecation warning; returns ``()`` outside a Hydra run.
+    """
+    try:
+        from hydra.core.hydra_config import HydraConfig
+
+        overrides = HydraConfig.get().overrides.task
+    except Exception:
+        return ()
+    found: list[str] = []
+    for override in overrides:
+        key = override.lstrip("+~").split("=", 1)[0].strip()
+        if key == "trainer.nnodes":
+            found.append("nnodes")
+        elif key == "trainer.n_gpus_per_node":
+            found.append("n_gpus_per_node")
+    return tuple(found)
+
+
 # Define a function to run the PPO-like training process
 def run_ppo(config, task_runner_class) -> None:
     """Initialize Ray cluster and run distributed PPO training process.
@@ -172,6 +193,16 @@ def main(config):
     """
     # Automatically set `config.trainer.device = npu` when running on Ascend NPU.
     auto_set_device(config)
+
+    # `topology` (opt-in, RFC #7269) is the single source of truth for placement. Derive the legacy
+    # trainer.nnodes / n_gpus_per_node from it (and deprecate setting them by hand) before validation
+    # and the workers read these scalars. No-op when the topology block is empty.
+    try:
+        from verl.trainer.ppo.topology_resolver import reconcile_trainer_dims_with_topology
+
+        reconcile_trainer_dims_with_topology(config, user_set_dims=_user_set_trainer_dims())
+    except Exception as e:
+        logger.warning("Could not reconcile trainer.nnodes / n_gpus_per_node with `topology`: %s", e)
 
     # validate config
     validate_config(

@@ -149,6 +149,7 @@ verl is fast with:
    advance/ppo_lora.rst
    sglang_multiturn/multiturn.rst
    advance/placement
+   advance/device_topology
    advance/dpo_extension
    examples/sandbox_fusion_example
    advance/rollout_trace.rst

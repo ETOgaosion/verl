@@ -86,7 +86,7 @@ from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_
 from verl.utils.skip import SkipManager
 from verl.utils.tracking import DapoFilteredRewardTableLogger, Tracking, ValidationGenerationsLogger
 from verl.workers.config import CriticConfig, DistillationConfig, HFModelConfig
-from verl.workers.engine_workers import ActorRolloutRefWorker, TrainingWorker, TrainingWorkerConfig
+from verl.workers.engine_workers import ActorWorker, RefWorker, RolloutWorker, TrainingWorker, TrainingWorkerConfig
 from verl.workers.rollout.llm_server import LLMServerClient, LLMServerManager
 from verl.workers.utils.losses import value_loss
 from verl.workers.utils.padding import response_from_nested, response_to_nested
@@ -232,18 +232,41 @@ class PPOTrainer(ABC):
         self._init_dump_executor()
         self._init_resource_pool_mgr()
         self.resource_pool_manager.create_resource_pool()
+        from verl.trainer.ppo.topology_resolver import bind_topology_ray_nodes
+
+        if getattr(self, "cluster_topology", None) is not None:
+            bind_topology_ray_nodes(self.cluster_topology, self.resource_pool_manager)
+            self._log_topology_report()
         self.resource_pool_to_cls = {pool: {} for pool in self.resource_pool_manager.resource_pool_dict.values()}
 
-        # 1. define actor and rollout class
-        actor_role = Role.ActorRolloutRef if Role.ActorRolloutRef in self.role_worker_mapping else Role.ActorRollout
-        actor_rollout_resource_pool = self.resource_pool_manager.get_resource_pool(actor_role)
-        actor_rollout_cls = RayClassWithInitArgs(
-            cls=self.role_worker_mapping[actor_role],
+        # 1. define atomic actor / rollout / ref worker classes (RFC #7269: no fused ActorRolloutRef).
+        # Actor, rollout and the (optional) colocated reference are declared on the same resource pool,
+        # so ``create_colocated_worker_cls`` places them in ONE ``WorkerDict`` process; that lets the
+        # actor push weights into its rollout peer in-process (HYBRID) via ``fused_worker_dict``.
+        distillation_config = self.config.get("distillation")
+        actor_rollout_resource_pool = self.resource_pool_manager.get_resource_pool(Role.Actor)
+        self.resource_pool_to_cls[actor_rollout_resource_pool]["actor"] = RayClassWithInitArgs(
+            cls=self.role_worker_mapping[Role.Actor],
             config=self.config.actor_rollout_ref,
-            distillation_config=self.config.get("distillation"),
-            role=str(actor_role),
+            distillation_config=distillation_config,
         )
-        self.resource_pool_to_cls[actor_rollout_resource_pool][str(actor_role)] = actor_rollout_cls
+
+        rollout_resource_pool = actor_rollout_resource_pool
+        if Role.Rollout in self.role_worker_mapping:
+            rollout_resource_pool = self.resource_pool_manager.get_resource_pool(Role.Rollout)
+            self.resource_pool_to_cls[rollout_resource_pool]["rollout"] = RayClassWithInitArgs(
+                cls=self.role_worker_mapping[Role.Rollout],
+                config=self.config.actor_rollout_ref,
+                distillation_config=distillation_config,
+            )
+
+        if Role.RefPolicy in self.role_worker_mapping:
+            ref_resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
+            self.resource_pool_to_cls[ref_resource_pool]["ref"] = RayClassWithInitArgs(
+                cls=self.role_worker_mapping[Role.RefPolicy],
+                config=self.config.actor_rollout_ref,
+                distillation_config=distillation_config,
+            )
 
         # 2. define critic class
         if self.use_critic:
@@ -308,20 +331,33 @@ class PPOTrainer(ABC):
             self.critic_wg.set_loss_fn(value_loss_)
             logger.info("critic model engine initialized")
 
-        # 6. initialize actor and ref model engine
-        self.actor_rollout_wg = all_wg[str(actor_role)]
-        self.actor_rollout_wg.init_model()
-        logger.info("actor and ref model engine initialized")
+        # 6. initialize actor / rollout / ref model engines. They share one WorkerDict process, so
+        # mirror the previous fused init order: reference first, then actor (+ checkpoint engine),
+        # then rollout.
+        self.actor_wg = all_wg["actor"]
+        self.rollout_wg = all_wg["rollout"] if "rollout" in all_wg else None
+        self.ref_wg = all_wg["ref"] if "ref" in all_wg else None
 
-        # if ref_in_actor is True, the reference policy will be actor without lora applied
+        # if ref_in_actor is True, the reference policy is the actor with the LoRA adapter disabled
         lora_rank = self.config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
         if lora_rank <= 0:
             lora_rank = self.config.actor_rollout_ref.model.get("lora_rank", 0)
         self.ref_in_actor = lora_rank > 0 or self.config.actor_rollout_ref.model.get("lora_adapter_path") is not None
-        if self.use_reference_policy and not self.ref_in_actor:
-            self.ref_policy_wg = all_wg[str(actor_role)]
+
+        if self.ref_wg is not None:
+            self.ref_wg.init_model()
+        self.actor_wg.init_model()
+        if self.rollout_wg is not None:
+            self.rollout_wg.init_model()
+        logger.info("actor, rollout and ref model engines initialized")
+
+        # The reference log-prob is served by the separate RefWorker, or by the actor itself (LoRA
+        # adapter disabled) when the reference is folded into the actor.
+        self.ref_policy_wg = None
         if self.ref_in_actor:
-            self.ref_policy_wg = self.actor_rollout_wg
+            self.ref_policy_wg = self.actor_wg
+        elif self.use_reference_policy:
+            self.ref_policy_wg = self.ref_wg
 
         # 7. initialize reward loop manager
         resource_pool = (
@@ -347,17 +383,19 @@ class PPOTrainer(ABC):
             self.teacher_model_manager = None
             self.distillation_config = None
 
-        # 9. initialize agent loop manager
+        # 9. initialize agent loop manager (generation targets the rollout worker group)
         self.llm_server_manager: LLMServerManager = LLMServerManager.create(
-            config=self.config, worker_group=self.actor_rollout_wg, rollout_resource_pool=actor_rollout_resource_pool
+            config=self.config,
+            worker_group=self.rollout_wg if self.rollout_wg is not None else self.actor_wg,
+            rollout_resource_pool=rollout_resource_pool,
         )
 
-        # 10. initialize checkpoint engine manager
+        # 10. initialize checkpoint engine manager (weight sync is driven by the actor worker group)
         checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
         checkpoint_engine_config.backend = "naive"
         self.checkpoint_manager: CheckpointEngineManager = CheckpointEngineManager(
             config=checkpoint_engine_config,
-            actor_wg=self.actor_rollout_wg,
+            actor_wg=self.actor_wg,
             replicas=self.llm_server_manager.get_replicas(),
         )
         logger.info("checkpoint engine manager initialized")
@@ -732,25 +770,52 @@ class PPOTrainer(ABC):
 
     def _init_resource_pool_mgr(self):
         config = self.config
-        # role => worker class
+        from verl.trainer.ppo.topology_resolver import (
+            build_config_topology,
+            resolve_legacy_placement,
+            resolve_placement,
+            topology_enabled,
+        )
+
+        # Opt-in declarative topology: a non-empty `topology:` block drives placement.
+        if topology_enabled(config):
+            self.cluster_topology = build_config_topology(config)
+            resolved = resolve_placement(config, self.cluster_topology)
+            self.role_worker_mapping = resolved.role_worker_mapping
+            self.role_pool_mapping = resolved.role_pool_mapping
+            self.mapping = self.role_pool_mapping
+            self.resource_pool_manager = ResourcePoolManager(
+                resource_pool_spec=resolved.resource_pool_spec,
+                mapping=resolved.role_pool_mapping,
+                accelerator_type=resolved.accelerator_type or None,
+            )
+            return
+
+        # role => worker class (atomic per-model workers; RFC #7269, no fused ActorRolloutRef)
         self.role_worker_mapping = {}
         # role => resource pool
-        self.mapping = {}
+        self.role_pool_mapping = {}
+        self.mapping = self.role_pool_mapping
 
-        # Add actor rollout worker to mapping
         lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
         if lora_rank <= 0:
             lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
         ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
 
-        role = Role.ActorRolloutRef if need_reference_policy(config) and not ref_in_actor else Role.ActorRollout
-        self.role_worker_mapping[role] = ray.remote(ActorRolloutRefWorker)
-        self.mapping[role] = "global_pool"
+        # Actor and rollout are always colocated on the global pool; the reference (unless folded into
+        # the actor via LoRA) is a separate worker sharing that same pool/process.
+        self.role_worker_mapping[Role.Actor] = ray.remote(ActorWorker)
+        self.role_pool_mapping[Role.Actor] = "global_pool"
+        self.role_worker_mapping[Role.Rollout] = ray.remote(RolloutWorker)
+        self.role_pool_mapping[Role.Rollout] = "global_pool"
+        if need_reference_policy(config) and not ref_in_actor:
+            self.role_worker_mapping[Role.RefPolicy] = ray.remote(RefWorker)
+            self.role_pool_mapping[Role.RefPolicy] = "global_pool"
 
         # Add critic worker to mapping.
         if need_critic(config):
             self.role_worker_mapping[Role.Critic] = ray.remote(TrainingWorker)
-            self.mapping[Role.Critic] = "global_pool"
+            self.role_pool_mapping[Role.Critic] = "global_pool"
 
         # Global resource pool is used for actor, rollout, critic, ref
         global_pool_id = "global_pool"
@@ -767,11 +832,11 @@ class PPOTrainer(ABC):
 
             reward_pool = [config.reward.reward_model.n_gpus_per_node] * config.reward.reward_model.nnodes
             resource_pool_spec["reward_pool"] = reward_pool
-            self.mapping[Role.RewardModel] = "reward_pool"
+            self.role_pool_mapping[Role.RewardModel] = "reward_pool"
         else:
             config.reward.reward_model.nnodes = config.trainer.nnodes
             config.reward.reward_model.n_gpus_per_node = config.trainer.n_gpus_per_node
-            self.mapping[Role.RewardModel] = "global_pool"
+            self.role_pool_mapping[Role.RewardModel] = "global_pool"
 
         distillation_config = config.get("distillation")
         if is_distillation_enabled(distillation_config):
@@ -782,9 +847,26 @@ class PPOTrainer(ABC):
 
             teacher_pool = [distillation_config.n_gpus_per_node] * distillation_config.nnodes
             resource_pool_spec["teacher_pool"] = teacher_pool
-            self.mapping[Role.TeacherModel] = "teacher_pool"
+            self.role_pool_mapping[Role.TeacherModel] = "teacher_pool"
 
-        self.resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=self.mapping)
+        resolved = resolve_legacy_placement(config, resource_pool_spec, self.role_pool_mapping)
+        self.role_worker_mapping = resolved.role_worker_mapping
+        self.cluster_topology = resolved.topology
+        self.resource_pool_manager = ResourcePoolManager(
+            resource_pool_spec=resolved.resource_pool_spec,
+            mapping=resolved.role_pool_mapping,
+        )
+
+    def _log_topology_report(self):
+        """Log the resolved device topology ('which GPU runs which role') at startup."""
+        topology = getattr(self, "cluster_topology", None)
+        if topology is None:
+            return
+        try:
+            topology.require_ray_resources()
+            logger.info("Device topology:\n%s", topology.describe())
+        except Exception as e:
+            logger.warning("Failed to render device topology report: %s", e)
 
     def _load_checkpoint(self):
         self.global_steps = 0
@@ -816,7 +898,7 @@ class PPOTrainer(ABC):
         logger.info(f"Resuming from {global_step_folder}, setting global step to {self.global_steps}")
 
         # 2. load actor checkpoint
-        self.actor_rollout_wg.load_checkpoint(
+        self.actor_wg.load_checkpoint(
             local_path=os.path.join(global_step_folder, "actor"),
             del_local_after_load=self.config.trainer.del_local_ckpt_after_load,
         )
@@ -912,7 +994,7 @@ class PPOTrainer(ABC):
             if self.config.trainer.default_hdfs_dir is None
             else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "actor")
         )
-        self.actor_rollout_wg.save_checkpoint(
+        self.actor_wg.save_checkpoint(
             actor_local_path, actor_remote_path, self.global_steps, max_ckpt_to_keep=max_actor_ckpt_to_keep
         )
 
@@ -1297,19 +1379,12 @@ class PPOTrainer(ABC):
             # (log-prob forwards and the actor update). Generation happens in the inference
             # engines below, which write their own traces.
             #
-            # In the hybrid engine, actor/rollout and the (colocated) reference -- and sometimes the
-            # critic -- share ONE worker group object, so ref_policy_wg / critic_wg can alias
-            # actor_rollout_wg. Each start/stop_profile round-trips to every rank and, on stop, runs
-            # the finish hook (e.g. the user's trace-upload command); driving the same physical
-            # workers more than once would fire that hook once per alias and upload the same trace
-            # file multiple times. Drive each distinct worker group exactly once.
-            self.actor_rollout_wg.start_profile(role="train", profile_step=self.global_steps)
-            seen = {id(self.actor_rollout_wg)}
-            if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
-                seen.add(id(self.ref_policy_wg))
-                self.ref_policy_wg.start_profile(profile_step=self.global_steps)
-            if self.use_critic and id(self.critic_wg) not in seen:
-                seen.add(id(self.critic_wg))
+            # Actor, rollout and the (colocated) reference share ONE WorkerDict process, so the
+            # "train" window on the actor already covers the log-prob forwards and the actor update
+            # in that process; the rollout/ref sub-workers are not profiled separately. The critic is
+            # its own worker group and is driven once.
+            self.actor_wg.start_profile(role="train", profile_step=self.global_steps)
+            if self.use_critic:
                 self.critic_wg.start_profile(profile_step=self.global_steps)
             # Rollout generation is decoupled from the training step in V1 (prompts are served
             # asynchronously and consumed from the replay buffer), so the inference engines are
@@ -1343,15 +1418,11 @@ class PPOTrainer(ABC):
             run_command = bool(
                 this_step_profile and profiled_steps and (self.global_steps == max(profiled_steps) or is_last_step)
             )
-            # See _start_profiling: skip aliased worker groups so the finish hook (and any trace
-            # upload it triggers) fires exactly once per distinct process, not once per role alias.
-            self.actor_rollout_wg.stop_profile(run_command=run_command)
-            seen = {id(self.actor_rollout_wg)}
-            if self.use_reference_policy and id(self.ref_policy_wg) not in seen:
-                seen.add(id(self.ref_policy_wg))
-                self.ref_policy_wg.stop_profile(run_command=run_command)
-            if self.use_critic and id(self.critic_wg) not in seen:
-                seen.add(id(self.critic_wg))
+            # See _start_profiling: the actor "train" window covers the shared actor/rollout/ref
+            # process; drive the actor and the (separate) critic worker group once each so the finish
+            # hook (and any trace upload it triggers) fires exactly once per distinct process.
+            self.actor_wg.stop_profile(run_command=run_command)
+            if self.use_critic:
                 self.critic_wg.stop_profile(run_command=run_command)
             for manager in self._rollout_server_managers():
                 manager.stop_profile()
@@ -1497,7 +1568,7 @@ class PPOTrainer(ABC):
     def _balance_batch(self, batch: KVBatchMeta, metrics, logging_prefix="global_seqlen", keep_minibatch=False):
         """Reorder the data on single controller such that each dp rank gets similar total tokens."""
         # get actor dp size
-        role, worker_group = "actor", self.actor_rollout_wg
+        role, worker_group = "actor", self.actor_wg
         if role not in worker_group._dispatch_info:
             dp_rank_mapping = worker_group._query_dispatch_info(role)
             worker_group._dispatch_info[role] = dp_rank_mapping
@@ -1544,7 +1615,7 @@ class PPOTrainer(ABC):
                 "temperature": self.config.actor_rollout_ref.rollout.temperature,
             }
         )
-        output: KVBatchMeta = self.actor_rollout_wg.compute_log_prob(batch)
+        output: KVBatchMeta = self.actor_wg.compute_log_prob(batch)
         assert len(output) == len(batch)
 
         fields = ["entropy", "log_probs", "response_mask"]
@@ -1593,7 +1664,7 @@ class PPOTrainer(ABC):
             metadata["no_lora_adapter"] = True
         batch.extra_info.update(metadata)
         if self.ref_in_actor:
-            output = self.actor_rollout_wg.compute_log_prob(batch)
+            output = self.actor_wg.compute_log_prob(batch)
         else:
             output = self.ref_policy_wg.compute_ref_log_prob(batch)
         assert len(output) == len(batch)
@@ -1746,7 +1817,7 @@ class PPOTrainer(ABC):
         }
         batch.extra_info.update(extra_info)
 
-        output: TensorDict = self.actor_rollout_wg.update_actor(batch)
+        output: TensorDict = self.actor_wg.update_actor(batch)
         output = rename_dict(output["metrics"], "actor/")
         output["perf/mfu/actor"] = output.pop("actor/mfu")
         actor_metrics = reduce_metrics(output)

@@ -42,6 +42,9 @@ defaults:
   # distillation config
   - distillation@distillation: distillation
 
+  # Declarative device topology (opt-in). Empty by default => legacy knobs drive placement.
+  - topology@topology: topology
+
   # TransferQueue configuration.
   - transfer_queue@transfer_queue: transfer_queue
 

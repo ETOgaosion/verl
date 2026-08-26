@@ -15,7 +15,6 @@ import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Callable, Optional
 
 import ray
@@ -24,6 +23,7 @@ from pydantic import BaseModel
 from ray.actor import ActorHandle
 
 from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup, ResourcePoolManager
+from verl.single_controller.topology import RolloutMode
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.device import get_device_name
 from verl.workers.config import HFModelConfig, RolloutConfig
@@ -49,22 +49,6 @@ class TokenOutput(BaseModel):
     """number of preempted times for metric calculation"""
     extra_fields: dict[str, Any] = {}
     """Extra fields for dynamic addition."""
-
-
-class RolloutMode(Enum):
-    # Rollout engine and training engine(fsdp/megatron) fused in same process
-    # Rollout and trainer share GPUs, switch context with weight synchronization.
-    # Usage scenarios: on-policy training.
-    HYBRID = "hybrid"
-
-    # Rollout engine colocated with hybrid engine in same ray placement group but in separate process.
-    # Rollout and hybrid processes share GPUs, switch context without weight synchronization.
-    # Usage scenarios: GRM (LLM as a judge).
-    COLOCATED = "colocated"
-
-    # Standalone rollout server with separate GPU resource, disaggregated architecture.
-    # Usage scenarios: off-policy training.
-    STANDALONE = "standalone"
 
 
 class RolloutReplica(ABC):

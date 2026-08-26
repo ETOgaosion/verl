@@ -23,7 +23,7 @@ from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.device import (
     get_device_name,
 )
-from verl.workers.engine_workers import ActorRolloutRefWorker, DistillationConfig
+from verl.workers.engine_workers import ActorWorker, DistillationConfig
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -33,28 +33,26 @@ device_name = get_device_name()
 __all__ = ["DetachActorWorker"]
 
 
-class DetachActorWorker(ActorRolloutRefWorker):
+class DetachActorWorker(ActorWorker):
     """
-    A worker class that extends ActorRolloutRefWorker to support detaching and restoring the actor model.
+    A worker class that extends the atomic :class:`ActorWorker` to support detaching and restoring
+    the actor model.
 
     This worker facilitates saving the model state to CPU and restoring it, enabling efficient
     resource management and checkpointing in distributed training. It currently supports
     FSDP, FSDP2, VeOmni, and Megatron strategies.
     """
 
-    def __init__(
-        self, config: DictConfig, role: str, distillation_config: Optional[DistillationConfig] = None, **kwargs
-    ):
+    def __init__(self, config: DictConfig, distillation_config: Optional[DistillationConfig] = None, **kwargs):
         """
         Initialize the DetachActorWorker.
 
         Args:
-            config: Configuration dictionary.
-            role: The role of the worker (e.g., 'actor', 'rollout', 'ref').
+            config: Configuration dictionary (the ``actor_rollout_ref`` config).
             distillation_config: Optional distillation configuration for OPD support.
-            **kwargs: Additional arguments passed to ActorRolloutRefWorker.
+            **kwargs: Additional arguments passed to ActorWorker.
         """
-        ActorRolloutRefWorker.__init__(self, config, role, distillation_config=distillation_config, **kwargs)
+        ActorWorker.__init__(self, config, distillation_config=distillation_config, **kwargs)
         self._strategy_handlers = None
 
     def _get_strategy_handlers(self):

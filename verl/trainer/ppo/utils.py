@@ -65,6 +65,8 @@ class Role(Enum):
             "ref": cls.RefPolicy,
             "rm": cls.RewardModel,
             "actor_rollout_ref": cls.ActorRolloutRef,
+            "env": cls.Env,
+            "teacher": cls.TeacherModel,
         }
         role = string_mapping.get(name.lower())
         if role is None:

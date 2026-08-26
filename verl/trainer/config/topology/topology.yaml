@@ -1,0 +1,32 @@
+# Declarative device topology (opt-in, RFC issue #7269).
+# Empty by default: when `clusters` and `models` are empty the legacy per-role knobs
+# (trainer.*, reward.reward_model.*, distillation.*) drive placement and existing
+# configs are untouched. A non-empty block drives placement instead, and a startup
+# report always prints which cluster/GPU runs which model.
+# The resolver lives in verl/trainer/ppo/topology_resolver.py and the data model in
+# verl/single_controller/topology.py.
+
+# Layer 1 - CLUSTERS: named, homogeneous machine groups. `name` doubles as the Ray
+# custom resource that pins those machines (start them with
+# `ray start --resources '{"h100": 8}'`), which is what makes heterogeneous hardware
+# expressible. With a single GPU type, name it `default`. Each cluster owns a flat GPU
+# index space `0 .. nnodes*n_gpus_per_node-1`; flat id g lives on node g // n_gpus_per_node.
+# List of {name, nnodes, n_gpus_per_node}.
+clusters: []
+
+# Layer 2 - DEVICE_POOLS: named GPU groups carved from one cluster, sized by
+# nnodes x n_gpus_per_node and allocated node-by-node in declaration order (so pools
+# within a cluster are disjoint). Optional `attributes` (e.g. `{elastic: true,
+# min_gpus: 8}`) are carried through and surfaced in the report.
+# List of {name, cluster, nnodes, n_gpus_per_node, attributes?}.
+device_pools: []
+
+# Layer 3 - MODELS: one entry = one model instance. `worker` is the worker class
+# (actor / rollout / ref / critic / rm / teacher), `config_key` the config subtree it
+# reads (e.g. actor_rollout_ref, critic), `resource_pool` the pool it runs on, and
+# optional `device_range: [start, end]` pins it to a sub-slice of that pool. Models
+# sharing a (config_key, resource_pool) are fused into one process; RolloutMode
+# (hybrid/colocated/standalone) is DERIVED from pool overlap with the actor, never
+# hand-written.
+# List of {name, worker, config_key, resource_pool, device_range?}.
+models: []

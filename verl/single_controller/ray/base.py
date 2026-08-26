@@ -127,6 +127,29 @@ class RayResourcePool(ResourcePool):
         self.pgs = None
         self.detached = detached
         self.accelerator_type = accelerator_type
+        # Populated by ``get_placement_groups()``: one entry per GPU bundle in PG order.
+        self.bundle_bindings: list[dict] = []
+
+    def _capture_bundle_bindings(self, pgs: list[PlacementGroup]) -> list[dict]:
+        """Record Ray node binding for each bundle across all placement groups."""
+        try:
+            node_ip = {node["NodeID"]: node["NodeManagerAddress"] for node in ray.nodes()}
+        except Exception:
+            node_ip = {}
+        bindings: list[dict] = []
+        for pg_idx, pg in enumerate(pgs):
+            specs = ray._private.state.state.placement_group_table(pg.id)
+            for bundle_idx, node_id in enumerate(specs["bundles_to_node_id"]):
+                bindings.append(
+                    {
+                        "pg_index": pg_idx,
+                        "bundle_index": bundle_idx,
+                        "node_id": node_id,
+                        "node_ip": node_ip.get(node_id),
+                    }
+                )
+        self.bundle_bindings = bindings
+        return bindings
 
     def get_placement_groups(self, strategy="STRICT_PACK", name=None, device_name="cuda"):
         if self.pgs is not None:
@@ -160,7 +183,8 @@ class RayResourcePool(ResourcePool):
         ray.get([pg.ready() for pg in pgs])
 
         self.pgs = sort_placement_group_by_node_ip(pgs)
-        return pgs
+        self._capture_bundle_bindings(self.pgs)
+        return self.pgs
 
 
 class SubRayResourcePool(RayResourcePool):
@@ -175,6 +199,8 @@ class SubRayResourcePool(RayResourcePool):
         self.pgs = placement_groups
         self.start_bundle_index = start_bundle_index
         self.subgroup_world_size = subgroup_world_size
+        if self.pgs:
+            self._capture_bundle_bindings(self.pgs)
 
     @property
     def world_size(self):
@@ -190,6 +216,9 @@ class ResourcePoolManager:
     resource_pool_spec: dict[str, list[int]]
     mapping: dict[int, str]
     max_colocate_count: int = 3
+    # Optional per-pool Ray custom-resource key (the topology cluster name) that pins each
+    # pool's bundles to machines started with that resource. None preserves legacy behavior.
+    accelerator_type: Optional[dict[str, str]] = None
     resource_pool_dict: dict[str, RayResourcePool] = field(default_factory=dict)
 
     def create_resource_pool(self):
@@ -210,6 +239,7 @@ class ResourcePoolManager:
                 use_gpu=True,
                 max_colocate_count=self.max_colocate_count,
                 name_prefix=resource_pool_name,
+                accelerator_type=(self.accelerator_type or {}).get(resource_pool_name),
             )
             self.resource_pool_dict[resource_pool_name] = resource_pool
 
@@ -1014,6 +1044,12 @@ def create_colocated_worker_cls(class_dict: dict[str, RayClassWithInitArgs]):
                     self.worker_dict[key] = user_defined_cls(
                         *init_args_dict[key].get("args", ()), **init_args_dict[key].get("kwargs", {})
                     )
+            # Give each colocated worker in-process access to its siblings (keyed by their
+            # spawn prefix), mirroring the FusedWorker path. A split ActorWorker uses this to
+            # reach its RolloutWorker peer for the direct (HYBRID) weight sync; single-worker
+            # WorkerDicts just get a {key: self} map, which is harmless.
+            for worker in self.worker_dict.values():
+                setattr(worker, Worker.fused_worker_attr_name, self.worker_dict)
 
     # now monkey-patch the methods from inner class to WorkerDict
     for key, user_defined_cls in cls_dict.items():
