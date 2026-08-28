@@ -374,6 +374,17 @@ override-dependencies = [
     "numpy>=2.0.0",
     "kernels>=0.10.2,<0.11",
     "flash-attn-4 ; platform_machine == 'flash-attn-4-excluded'",
+    # aarch64 only: nvidia-cusparselt-cu13 0.8.0/0.8.1 ship an internal WHEEL tag
+    # of `manylinux2014_sbsa` while the filename says `aarch64`. uv rejects the
+    # mismatch and reinstalls the package on EVERY `uv run`; 100+ concurrent Ray
+    # workers then race deleting libcusparseLt.so.0 and crash torch import
+    # (astral-sh/uv#17711). 0.9.1 fixed the internal tag to `manylinux2014_aarch64`
+    # and moves the lib to nvidia/cu13/lib/, which torch 2.11's _preload_cuda_deps
+    # already searches ("nvidia/cuXX/lib since CUDA 13.0"). SONAME stays .so.0.
+    # x86_64 keeps 0.8.0 (its tag is correct; no reinstall) to avoid churning a
+    # working config.
+    "nvidia-cusparselt-cu13==0.8.0 ; platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "nvidia-cusparselt-cu13==0.9.1 ; platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 
 # Skip lock-time metadata builds for git-source packages with no [project] /
