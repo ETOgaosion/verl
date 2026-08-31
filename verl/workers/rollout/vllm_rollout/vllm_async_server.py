@@ -1007,6 +1007,14 @@ class vLLMHttpServer:
                     f"max_position_embeddings ({max_position_embeddings})"
                 )
 
+        if not self.config.enable_chunked_prefill and self.config.max_num_batched_tokens < self.config.max_model_len:
+            logger.warning(
+                "enable_chunked_prefill=False requires max_num_batched_tokens >= max_model_len "
+                f"({self.config.max_model_len}); raising max_num_batched_tokens from "
+                f"{self.config.max_num_batched_tokens} to {self.config.max_model_len}."
+            )
+            self.config.max_num_batched_tokens = self.config.max_model_len
+
     def _post_init(self, cuda_visible_devices: str) -> None:
         """Called at the end of __init__. Default logs server metadata."""
         logger.info(
