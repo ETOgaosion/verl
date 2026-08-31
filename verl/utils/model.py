@@ -608,6 +608,7 @@ def patch_valuehead_model(model) -> None:
     from types import MethodType
 
     from transformers import PreTrainedModel
+
     try:
         from trl.experimental.ppo import AutoModelForCausalLMWithValueHead  # type: ignore
     except ImportError:
