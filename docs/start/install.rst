@@ -70,10 +70,20 @@ shell, a Docker cache bake); see `Managing environments explicitly`_.
    ``TORCH_CUDA_ARCH_LIST`` ``9.0;10.0``, the only CUDA parts an arm64 host
    has). The inference engines
    (``vllm``, ``sglang``, ``sglang-kernel``) come straight from PyPI, whose
-   wheels for the pinned versions are already cu130 / torch-2.11 builds. Only the
-   git-sourced ``megatron-core`` (``core_v0.18.0``, paired with
-   ``megatron-bridge`` 0.5.2) and ``mbridge`` are built when the environment is
-   first materialized.
+   wheels for the pinned versions are already cu130 / torch-2.11 builds. The
+   packages built **from source** when an environment is first materialized are
+   all git-sourced: ``megatron-core`` (``core_v0.18.0``, paired with
+   ``megatron-bridge`` 0.5.2), ``mbridge``, and — on the GPU backends that use
+   them — the DeepSeek CUDA kernels ``deep-ep`` (MoE all-to-all; vllm / sglang /
+   megatron), ``flash-mla`` (MLA decode attention; sglang / megatron; vllm
+   vendors its own copy) and ``fast-hadamard-transform`` (megatron's DeepSeek
+   sparse attention). The kernels build ``--no-build-isolation`` against the
+   synced torch and need a CUDA build environment uv does **not** provide:
+   a system NVSHMEM (``$NVSHMEM_DIR`` with the ``libnvshmem_host.so`` symlink),
+   CCCL headers on ``CPATH`` and ``TORCH_CUDA_ARCH_LIST="9.0;10.0"``. The uv
+   Docker image bakes all of that in (see ``docker/Dockerfile.uv.cu130``); on a
+   bare-metal ``uv sync`` set them up the same way
+   ``docker/Dockerfile.stable.vllm`` does, or the source build fails.
 
 Run a job or a test
 :::::::::::::::::::::
@@ -363,9 +373,13 @@ uv troubleshooting
 - **Start over** — ``python manage_envs.py clean``, then run again.
 
 Some system-level pieces are not handled by uv at all (the Dockerfiles set them
-up): system apt packages, GDRCopy + DeepEP for MoE all-to-all, Mooncake for
-SGLang KV-cache transfer, the flashinfer JIT cache, and sgl-router. See
-``docker/Dockerfile.stable.{vllm,sglang}`` for reference.
+up): system apt packages, GDRCopy, and the system NVSHMEM / CCCL build
+environment the git-built DeepEP / FlashMLA / fast-hadamard-transform kernels
+link against (the kernels themselves come from ``uv.lock`` now — see the note
+under *Install with uv*), plus the stable-image extras Mooncake for SGLang
+KV-cache transfer, the flashinfer JIT cache, and sgl-router. The uv image bakes
+these in ``docker/Dockerfile.uv.cu130``; for the pip stable images see
+``docker/Dockerfile.stable.{vllm,sglang}``.
 
 
 Install from docker image
