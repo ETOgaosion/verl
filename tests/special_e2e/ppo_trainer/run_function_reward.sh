@@ -11,9 +11,6 @@ TRAIN_FILES=${TRAIN_FILES:-$HOME/data/gsm8k/train.parquet}
 VAL_FILES=${VAL_FILES:-$HOME/data/gsm8k/test.parquet}
 MAX_PROMPT_LEN=${MAX_PROMPT_LEN:-512}
 MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-512}
-# vLLM rejects enable_chunked_prefill=False when max_num_batched_tokens < max_model_len.
-# VL models default max_model_len to max_position_embeddings (e.g. 128k), so pin it to
-# the actual prompt+response budget used by this E2E script.
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-$((MAX_PROMPT_LEN + MAX_RESPONSE_LEN))}
 
 ENGINE=${ENGINE:-vllm}
