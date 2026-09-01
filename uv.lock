@@ -33,16 +33,12 @@ overrides = [
 
 [[manifest.dependency-metadata]]
 name = "deep-ep"
-version = "1.2.1+3f601f7"
+version = "1.2.1"
 
 [[manifest.dependency-metadata]]
 name = "fast-hadamard-transform"
 version = "1.1.0"
 requires-dist = ["torch", "packaging", "ninja"]
-
-[[manifest.dependency-metadata]]
-name = "flash-mla"
-version = "1.0.0+15f13e5"
 
 [[manifest.dependency-metadata]]
 name = "mbridge"
@@ -759,8 +755,12 @@ wheels = [
 
 [[package]]
 name = "deep-ep"
-version = "1.2.1+3f601f7"
-source = { git = "https://github.com/deepseek-ai/DeepEP.git?rev=3f601f7ac1c062c46502646ff04c535013bfca00#3f601f7ac1c062c46502646ff04c535013bfca00" }
+version = "1.2.1"
+source = { registry = "https://verl-project.github.io/verl-wheelhouse/simple/" }
+wheels = [
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/deep-ep-3f601f7ac1c062c46502646ff04c535013bfca00/deep_ep-1.2.1-cp312-cp312-linux_aarch64.whl" },
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/deep-ep-3f601f7ac1c062c46502646ff04c535013bfca00/deep_ep-1.2.1-cp312-cp312-linux_x86_64.whl" },
+]
 
 [[package]]
 name = "depyf"
@@ -1072,8 +1072,12 @@ wheels = [
 
 [[package]]
 name = "flash-mla"
-version = "1.0.0+15f13e5"
-source = { git = "https://github.com/deepseek-ai/FlashMLA.git?rev=15f13e5030374295491c5ce31b02d7e63a7772c6#15f13e5030374295491c5ce31b02d7e63a7772c6" }
+version = "1.0.0"
+source = { registry = "https://verl-project.github.io/verl-wheelhouse/simple/" }
+wheels = [
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/flash-mla-15f13e5030374295491c5ce31b02d7e63a7772c6/flash_mla-1.0.0-cp312-cp312-linux_aarch64.whl" },
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/flash-mla-15f13e5030374295491c5ce31b02d7e63a7772c6/flash_mla-1.0.0-cp312-cp312-linux_x86_64.whl" },
+]
 
 [[package]]
 name = "flashinfer-cubin"
@@ -5259,14 +5263,14 @@ requires-dist = [
     { name = "cupy-cuda13x", marker = "extra == 'cupy-cu130'", specifier = "==14.0.1" },
     { name = "datasets" },
     { name = "datasets", marker = "extra == 'verl-core'" },
-    { name = "deep-ep", marker = "extra == 'deepep-cu130'", git = "https://github.com/deepseek-ai/DeepEP.git?rev=3f601f7ac1c062c46502646ff04c535013bfca00" },
+    { name = "deep-ep", marker = "extra == 'deepep-cu130'", specifier = "==1.2.1", index = "https://verl-project.github.io/verl-wheelhouse/simple/" },
     { name = "dill" },
     { name = "dill", marker = "extra == 'verl-core'" },
     { name = "fast-hadamard-transform", marker = "extra == 'fasthadamard-cu130'", git = "https://github.com/Dao-AILab/fast-hadamard-transform.git?rev=e7706faf8d1c3b9f241e36860640ad1dac644ede" },
     { name = "fastapi", marker = "extra == 'verl-core'" },
     { name = "flash-attn", marker = "extra == 'flash-attn-cu130torch211'", specifier = "==2.8.3", index = "https://verl-project.github.io/verl-wheelhouse/simple/" },
     { name = "flash-linear-attention", marker = "extra == 'fsdp'", specifier = "==0.5.2" },
-    { name = "flash-mla", marker = "extra == 'flashmla-cu130'", git = "https://github.com/deepseek-ai/FlashMLA.git?rev=15f13e5030374295491c5ce31b02d7e63a7772c6" },
+    { name = "flash-mla", marker = "extra == 'flashmla-cu130'", specifier = "==1.0.0", index = "https://verl-project.github.io/verl-wheelhouse/simple/" },
     { name = "hf-transfer", marker = "extra == 'ci'" },
     { name = "hydra-core" },
     { name = "hydra-core", marker = "extra == 'verl-core'" },
