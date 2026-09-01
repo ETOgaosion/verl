@@ -42,6 +42,9 @@ on:
     paths:
       - "**/*.py"
       - .github/workflows/sgl.yml
+      # Dependency set: the `uv run --frozen` below installs from these
+      - "pyproject.toml"
+      - "uv.lock"
   pull_request:
     branches:
       - main
@@ -64,6 +67,9 @@ on:
       - "tests/rollout/*sglang*"
       - "tests/experimental/agent_loop"
       - "tests/rollout/async_rollout_utils.py"
+      # Dependency set: the `uv run --frozen` below installs from these
+      - "pyproject.toml"
+      - "uv.lock"
 
 # Cancel jobs on the same ref if a new one is triggered
 concurrency:

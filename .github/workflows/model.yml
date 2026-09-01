@@ -51,6 +51,9 @@ on:
       - "tests/special_distributed/test_tensor_dict.py"
       - "tests/models/**"
       - "tests/special_distributed/run_all.sh"
+      # Dependency set: the `uv run --frozen` below installs from these
+      - "pyproject.toml"
+      - "uv.lock"
 
 # Declare permissions just read content.
 permissions:
