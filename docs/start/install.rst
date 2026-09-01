@@ -61,7 +61,7 @@ shell, a Docker cache bake); see `Managing environments explicitly`_.
 
    uv never compiles a native package from source. ``apex``,
    ``transformer-engine``, ``flash-attn`` and the DeepSeek kernels ``deep-ep`` /
-   ``flash-mla`` — plus the pure-python
+   ``flash-mla`` / ``fast-hadamard-transform`` — plus the pure-python
    ``megatron-bridge`` — are pulled **prebuilt** from the verl wheelhouse index
    (`verl-project.github.io/verl-wheelhouse
    <https://verl-project.github.io/verl-wheelhouse/simple/>`_, wired in
@@ -74,12 +74,11 @@ shell, a Docker cache bake); see `Managing environments explicitly`_.
    wheels for the pinned versions are already cu130 / torch-2.11 builds. The
    packages built **from source** when an environment is first materialized are
    all git-sourced: ``megatron-core`` (``core_v0.18.0``, paired with
-   ``megatron-bridge`` 0.5.2), ``mbridge``, and — on megatron only —
-   ``fast-hadamard-transform`` (DeepSeek sparse attention), a few seconds of
-   nvcc each rather than the tens of minutes ``deep-ep`` / ``flash-mla`` used to
-   cost before they moved to the wheelhouse. They build ``--no-build-isolation``
-   against the synced torch and need a CUDA build environment uv does **not**
-   provide: CCCL headers on ``CPATH`` and ``TORCH_CUDA_ARCH_LIST="9.0;10.0"``.
+   ``megatron-bridge`` 0.5.2) and ``mbridge``. Neither compiles CUDA:
+   ``fast-hadamard-transform`` (DeepSeek sparse attention) was the last that
+   did, and it moved to the wheelhouse because its ``setup.py`` picks gencode
+   flags off the CUDA toolkit version and ignores ``TORCH_CUDA_ARCH_LIST`` —
+   so on CUDA 13 every image build compiled nine of them.
    Separately, the prebuilt ``deep-ep`` wheel resolves NVSHMEM through an rpath
    baked in at build time, so it needs ``nvidia-nvshmem-cu13`` installed at the
    path the wheelhouse built against
@@ -362,7 +361,8 @@ uv troubleshooting
 - **A run reinstalls torch every time** — two commands in the same job asked for
   different extras. Keep one combination per job.
 - **``No solution found`` for ``apex`` / ``transformer-engine`` /
-  ``flash-attn`` / ``deep-ep`` / ``flash-mla``** — these are pulled prebuilt
+  ``flash-attn`` / ``deep-ep`` / ``flash-mla`` /
+  ``fast-hadamard-transform``** — these are pulled prebuilt
   from the verl wheelhouse (see the
   note under *Install with uv*). It means the resolver found no matching wheel
   for your platform or the wheelhouse was unreachable; the uv flow supports only
@@ -377,11 +377,11 @@ uv troubleshooting
 - **Start over** — ``python manage_envs.py clean``, then run again.
 
 Some system-level pieces are not handled by uv at all (the Dockerfiles set them
-up): system apt packages, GDRCopy, the CCCL headers the git-built
-fast-hadamard-transform compiles against, and the system NVSHMEM the prebuilt
-DeepEP wheel loads at run time (the packages themselves come from ``uv.lock``
-now — see the note under *Install with uv*), plus the stable-image extras
-Mooncake for SGLang
+up): system apt packages, GDRCopy, the CCCL headers and
+``TORCH_CUDA_ARCH_LIST`` any runtime JIT compile needs, and the system NVSHMEM
+the prebuilt DeepEP wheel loads at run time (the packages themselves come from
+``uv.lock`` now — see the note under *Install with uv*), plus the stable-image
+extras Mooncake for SGLang
 KV-cache transfer, the flashinfer JIT cache, and sgl-router. The uv image bakes
 these in ``docker/Dockerfile.uv.cu130``; for the pip stable images see
 ``docker/Dockerfile.stable.{vllm,sglang}``.

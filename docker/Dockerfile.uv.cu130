@@ -251,11 +251,14 @@ RUN CUDA_TARGET=$(case "$(uname -m)" in aarch64) echo sbsa-linux;; *) echo x86_6
 ARG CPATH=""
 ENV CPATH=/usr/local/cuda-cccl${CPATH:+:${CPATH}}
 
-# Hopper+Blackwell archs for the git-built kernels. FORCE_BUILD skips
-# fast-hadamard's prebuilt-wheel URL guess (none exists for cu130/torch 2.11)
-# and compiles from source.
-ENV TORCH_CUDA_ARCH_LIST="9.0;10.0" \
-    FAST_HADAMARD_TRANSFORM_FORCE_BUILD=TRUE
+# Hopper+Blackwell archs. No CUDA kernel is compiled from source in this image
+# any more — fast-hadamard-transform, the last one, now comes prebuilt from the
+# wheelhouse alongside deep-ep / flash-mla — but torch's cpp_extension reads
+# this for any runtime JIT compile (flashinfer, DeepEP's hybrid-EP backend), so
+# it stays. It was never what bounded fast-hadamard's build anyway: that
+# setup.py derives its own gencode flags from the toolkit version and ignores
+# this variable entirely.
+ENV TORCH_CUDA_ARCH_LIST="9.0;10.0"
 
 # ---------------------------------------------------------------------------
 # uv — single static binary. We bake the full uv cache from the committed
@@ -314,10 +317,9 @@ RUN printf 'verl\n' > README.md
 # sglang+megatron, cpu) into throwaway envs purely to fill UV_CACHE_DIR
 # (/root/.cache/uv) with every wheel & built artifact those backends need from
 # uv.lock. The only native compiles left are the git-sourced megatron-core /
-# mbridge and fast-hadamard-transform (built no-build-isolation against the
-# CCCL headers in `base`): apex / TransformerEngine / flash-attn / deep-ep /
-# flash-mla and megatron-bridge come prebuilt from the wheelhouse, vllm /
-# sglang / sglang-kernel from PyPI.
+# mbridge: apex / TransformerEngine / flash-attn / deep-ep / flash-mla /
+# fast-hadamard-transform and megatron-bridge come prebuilt from the
+# wheelhouse, vllm / sglang / sglang-kernel from PyPI.
 # The `cu130 dev` scope keeps this image to its torch-2.11 world. (The deferred
 # cu12.9 / torch-2.9.1 world is commented out in pyproject.toml.) It passes
 # --no-install-project, so only deps are cached and this
