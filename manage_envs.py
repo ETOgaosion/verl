@@ -739,11 +739,11 @@ def cmd_prefetch(args: argparse.Namespace) -> int:
 
     ``uv lock`` reads only ``pyproject.toml`` + the declared
     ``[tool.uv.dependency-metadata]``, so it triggers NO source build — the
-    git-sourced megatron-core / mbridge and fast-hadamard-transform
-    (no-build-isolation) are compiled in step 2, not here (apex / TE /
-    flash-attn / deep-ep / flash-mla ship prebuilt from the wheelhouse, vllm /
-    sglang / sglang-kernel from PyPI). Those source builds need the CCCL / arch
-    build env baked by docker/Dockerfile.uv.cu130.
+    git-sourced megatron-core / mbridge are compiled in step 2, not here
+    (apex / TE / flash-attn / deep-ep / flash-mla / fast-hadamard-transform
+    ship prebuilt from the wheelhouse, vllm / sglang / sglang-kernel from
+    PyPI). Those source builds need the CCCL / arch build env baked by
+    docker/Dockerfile.uv.cu130.
 
     Use it once after cloning, or in a Docker layer so both the lock and the
     cache ship *inside* the image: bake it as a real layer (no
@@ -792,8 +792,8 @@ def cmd_prefetch(args: argparse.Namespace) -> int:
     # what that combo needs and never removes anything — which also mirrors
     # exactly what a real runtime `uv sync <combo>` does. Only the shared uv
     # cache (UV_CACHE_DIR) is durable: wheels download once and the git-source
-    # builds (megatron-core / mbridge, fast-hadamard-transform) build once,
-    # then later combos hardlink them from the cache instead of rebuilding.
+    # builds (megatron-core / mbridge) build once, then later combos hardlink
+    # them from the cache instead of rebuilding.
     # Peak disk is one env at a time (each tempdir is torn down before the next).
     for combo in combos:
         with tempfile.TemporaryDirectory(prefix="verl-prefetch-") as tmp:
