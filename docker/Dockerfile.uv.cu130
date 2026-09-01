@@ -241,10 +241,14 @@ RUN pip3 install --break-system-packages nvidia-nvshmem-cu13==${NVSHMEM_VERSION}
 ENV NVSHMEM_DIR=/usr/local/lib/python3.12/dist-packages/nvidia/nvshmem
 
 # CCCL headers (libcudacxx/cub/thrust) at a stable path on CPATH for the
-# FlashMLA / deep-ep source builds, same as Dockerfile.stable.vllm.
+# FlashMLA / deep-ep source builds, same as Dockerfile.stable.vllm. Keep any
+# CPATH the base image exports, but put the separator inside the expansion so
+# an unset one doesn't leave a trailing ":" (an empty entry means "."). Today's
+# CUDA base leaves CPATH unset, so BuildKit's UndefinedVar check warns here;
+# that is a false positive we accept rather than pin the value.
 RUN CUDA_TARGET=$(case "$(uname -m)" in aarch64) echo sbsa-linux;; *) echo x86_64-linux;; esac) \
     && ln -sfn /usr/local/cuda/targets/${CUDA_TARGET}/include/cccl /usr/local/cuda-cccl
-ENV CPATH=/usr/local/cuda-cccl:${CPATH}
+ENV CPATH=/usr/local/cuda-cccl${CPATH:+:${CPATH}}
 
 # Hopper+Blackwell archs for the git-built kernels (FlashMLA hardcodes sm_90a/
 # sm_100f and ignores this). FORCE_BUILD skips fast-hadamard's prebuilt-wheel
