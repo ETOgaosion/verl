@@ -84,11 +84,13 @@ flash-attn-cu130torch211 = ["flash-attn==2.8.3"]
 # fails to import and the backend never reaches CheckpointEngineRegistry.
 cupy-cu130 = ["cupy-cuda13x==14.0.1"]
 
-# DeepSeek kernels, git-built at sync time (sources/metadata/no-build-isolation
-# below; CUDA 13 build env baked by docker/Dockerfile.uv.cu130). Internal —
-# pulled by the GPU backends, not installed alone.
-deepep-cu130 = ["deep-ep"]            # MoE all-to-all: megatron / vllm / sglang
-flashmla-cu130 = ["flash-mla"]        # MLA decode: megatron / sglang (vllm vendors its own)
+# DeepSeek kernels. deep-ep / flash-mla come prebuilt from the wheelhouse
+# (routed in [tool.uv.sources] below, like flash-attn); fast-hadamard-transform
+# is still git-built at sync time (source/metadata/no-build-isolation below;
+# CUDA 13 build env baked by docker/Dockerfile.uv.cu130). Internal — pulled by
+# the GPU backends, not installed alone.
+deepep-cu130 = ["deep-ep==1.2.1"]     # MoE all-to-all: megatron / vllm / sglang
+flashmla-cu130 = ["flash-mla==1.0.0"] # MLA decode: megatron / sglang (vllm vendors its own)
 fasthadamard-cu130 = ["fast-hadamard-transform"]  # megatron DSA only (verl shims a torch fallback)
 
 # ---- inference backends ----------------------------------------------------
@@ -360,7 +362,7 @@ conflicts = [
 
 # setup.py imports torch at top level, so it must build against the synced
 # env's torch (== pip --no-build-isolation); metadata overridden above.
-no-build-isolation-package = ["deep-ep", "flash-mla", "fast-hadamard-transform"]
+no-build-isolation-package = ["fast-hadamard-transform"]
 
 # Global override pins:
 #   * transformers==5.9.0 project-wide — one version for every backend, so a
@@ -440,26 +442,21 @@ name = "veomni"
 version = "0.1.11"
 requires-dist = []
 
-# Git-built DeepSeek kernels: setup.py imports torch (flash-mla also runs
-# `git submodule update`), so metadata is overridden here and they build with
-# no-build-isolation (below). Versions/sources track [tool.uv.sources].
-#
-# deep-ep / flash-mla append `+<git short sha>` to their own wheel version with
-# no env kill-switch, so the version here MUST carry that same local segment —
-# otherwise uv reinstalls them on every `uv run` (cf. NO_VCS_VERSION for
-# megatron-core). Bump suffix and rev together. deep-ep also declares `pynvml`,
-# dropped here: vllm/sglang already ship nvidia-ml-py (same module) and the two
-# collide.
+# deep-ep comes prebuilt from the wheelhouse, but its wheel metadata declares
+# `pynvml`, which ships the same top-level `pynvml` module as the nvidia-ml-py
+# that vllm / sglang already pull in — install both and whichever landed last
+# wins. Declared EMPTY here to drop it, same trick as megatron-bridge above.
+# flash-mla needs no entry at all: its setup.py declares no dependencies, so the
+# wheel's own metadata is already what we want.
 [[tool.uv.dependency-metadata]]
 name = "deep-ep"
-version = "1.2.1+3f601f7"
+version = "1.2.1"
 requires-dist = []
 
-[[tool.uv.dependency-metadata]]
-name = "flash-mla"
-version = "1.0.0+15f13e5"
-requires-dist = []
-
+# fast-hadamard-transform is the one DeepSeek-stack kernel still built from git
+# at sync time: its setup.py imports torch at module scope, hence the metadata
+# override here plus no-build-isolation above. Version/source track
+# [tool.uv.sources] below; bump together.
 [[tool.uv.dependency-metadata]]
 name = "fast-hadamard-transform"
 version = "1.1.0"
@@ -470,6 +467,18 @@ requires-dist = ["torch", "packaging", "ninja"]
 # rides along (pure-python wheel off the same wheelhouse, so no git clone / build
 # either), and being py3-none-any it is the one wheelhouse component with a single
 # arch-independent build.
+#
+# The version pinned in the extras above is the wheelhouse build's version, and
+# the git ref it was built from lives in that repo's versions.yaml (mirrored in
+# its release tag: e.g. deep-ep-3f601f7ac1c0...). Bumping a ref therefore means
+# rebuilding there FIRST, then pinning the new version here — unlike the git
+# sources below, a rev change here would resolve to nothing.
+#
+# deep-ep's wheel additionally carries `-Wl,-rpath,$NVSHMEM_DIR/lib` baked in at
+# build time, so it resolves libnvshmem_host.so only where NVSHMEM sits at the
+# path the wheelhouse built against: /usr/local/lib/python3.12/dist-packages/
+# nvidia/nvshmem, which is exactly where docker/Dockerfile.uv.cu130 pip-installs
+# it as a system package. Keep those two in step (path AND NVSHMEM_VERSION).
 #
 # The inference engines are deliberately NOT routed: upstream publishes cu130 /
 # torch-2.11 wheels for the pinned vllm / sglang / sglang-kernel versions on PyPI,
@@ -482,6 +491,8 @@ apex                 = { index = "verl-wheelhouse" }
 flash-attn           = { index = "verl-wheelhouse" }
 transformer-engine   = { index = "verl-wheelhouse" }
 megatron-bridge      = { index = "verl-wheelhouse" }
+deep-ep              = { index = "verl-wheelhouse" }
+flash-mla            = { index = "verl-wheelhouse" }
 
 # megatron-core / mbridge aren't in the wheelhouse; git-sourced (built at sync
 # time). The wheelhouse megatron-bridge 0.5.2 (r0.5.0 branch) pairs with
@@ -489,9 +500,9 @@ megatron-bridge      = { index = "verl-wheelhouse" }
 mbridge            = { git = "https://github.com/ISEEKYAN/mbridge.git",            rev = "641a5a0" }
 megatron-core      = { git = "https://github.com/NVIDIA/Megatron-LM.git",          tag = "core_v0.18.0" }
 
-# DeepSeek kernels, git-sourced (same pins as docker/Dockerfile.stable.vllm).
-deep-ep                  = { git = "https://github.com/deepseek-ai/DeepEP.git",                  rev = "3f601f7ac1c062c46502646ff04c535013bfca00" }
-flash-mla                = { git = "https://github.com/deepseek-ai/FlashMLA.git",               rev = "15f13e5030374295491c5ce31b02d7e63a7772c6" }
+# The last git-sourced DeepSeek kernel (same pin as docker/Dockerfile.stable.vllm).
+# It builds in seconds, so it never earned a wheelhouse slot the way deep-ep and
+# flash-mla — tens of minutes of nvcc each — did.
 fast-hadamard-transform  = { git = "https://github.com/Dao-AILab/fast-hadamard-transform.git", rev = "e7706faf8d1c3b9f241e36860640ad1dac644ede" }
 
 # Per-extra routing to the matching pytorch wheel index.

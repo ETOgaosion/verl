@@ -230,18 +230,19 @@ RUN mkdir -p /tmp/gdrcopy && cd /tmp \
 # DeepEP IBGDA symlink fix (sglang base).
 RUN ln -sf /usr/lib/$(uname -m)-linux-gnu/libmlx5.so.1 /usr/lib/$(uname -m)-linux-gnu/libmlx5.so
 
-# NVSHMEM as a SYSTEM pip package, not through uv: deep-ep links against it and
-# bakes `-Wl,-rpath,$NVSHMEM_DIR/lib`, and prefetch builds in a throwaway /tmp
-# env — a venv copy would dangle from the cached wheel. deep-ep links the
-# non-versioned -l:libnvshmem_host.so when NVSHMEM_DIR is set, so symlink it
-# (torch also pulls the same 3.4.5 into venvs transitively; harmless dup).
-RUN pip3 install --break-system-packages nvidia-nvshmem-cu13==${NVSHMEM_VERSION} \
-    && ln -sf libnvshmem_host.so.3 \
-        /usr/local/lib/python3.12/dist-packages/nvidia/nvshmem/lib/libnvshmem_host.so
+# NVSHMEM as a SYSTEM pip package, not through uv: the prebuilt deep-ep wheel
+# links against it with `-Wl,-rpath,$NVSHMEM_DIR/lib` baked in, and the
+# wheelhouse builds it against exactly this dist-packages path — so NVSHMEM has
+# to sit here, at this version, for the wheel to resolve libnvshmem_host.so.3 at
+# run time. Keep the path and NVSHMEM_VERSION in step with that build (see the
+# wheelhouse note in pyproject.toml's [tool.uv.sources]). A venv copy would not
+# do: every `uv sync` combo gets its own venv, none of them at a fixed path.
+# (torch pulls the same 3.4.5 into venvs transitively; harmless dup.)
+RUN pip3 install --break-system-packages nvidia-nvshmem-cu13==${NVSHMEM_VERSION}
 ENV NVSHMEM_DIR=/usr/local/lib/python3.12/dist-packages/nvidia/nvshmem
 
 # CCCL headers (libcudacxx/cub/thrust) at a stable path on CPATH for the
-# FlashMLA / deep-ep source builds, same as Dockerfile.stable.vllm. Separator
+# remaining source builds, same as Dockerfile.stable.vllm. Separator
 # inside the expansion so an unset CPATH leaves no trailing ":" (an empty entry
 # means "."). The empty ARG only declares the name for BuildKit's UndefinedVar
 # check; an ENV of the same name still wins the expansion.
@@ -250,9 +251,9 @@ RUN CUDA_TARGET=$(case "$(uname -m)" in aarch64) echo sbsa-linux;; *) echo x86_6
 ARG CPATH=""
 ENV CPATH=/usr/local/cuda-cccl${CPATH:+:${CPATH}}
 
-# Hopper+Blackwell archs for the git-built kernels (FlashMLA hardcodes sm_90a/
-# sm_100f and ignores this). FORCE_BUILD skips fast-hadamard's prebuilt-wheel
-# URL guess (none exists for cu130/torch 2.11) and compiles from source.
+# Hopper+Blackwell archs for the git-built kernels. FORCE_BUILD skips
+# fast-hadamard's prebuilt-wheel URL guess (none exists for cu130/torch 2.11)
+# and compiles from source.
 ENV TORCH_CUDA_ARCH_LIST="9.0;10.0" \
     FAST_HADAMARD_TRANSFORM_FORCE_BUILD=TRUE
 
@@ -278,8 +279,6 @@ ENV UV_HTTP_TIMEOUT=500 \
 # mismatch with the locked 0.18.0 and reinstalls it on every `uv run` — racing
 # across 100+ Ray workers. Set it here so the prefetch-baked wheel AND every
 # runtime `uv run` build the clean 0.18.0.
-# deep-ep / flash-mla do the same +sha trick but have no env switch; their
-# locked versions carry the matching local segment in pyproject.toml instead.
 ENV NO_VCS_VERSION=1
 
 # Enable CUDA forward compatibility by setting '-e VLLM_ENABLE_CUDA_COMPATIBILITY=1'.
@@ -314,11 +313,11 @@ RUN printf 'verl\n' > README.md
 # syncs the conflict-free runtime combos (vllm+fsdp, vllm+megatron, sglang+fsdp,
 # sglang+megatron, cpu) into throwaway envs purely to fill UV_CACHE_DIR
 # (/root/.cache/uv) with every wheel & built artifact those backends need from
-# uv.lock. The only native compiles are the git-sourced megatron-core / mbridge
-# plus the DeepSeek kernels (deep-ep / flash-mla / fast-hadamard-transform,
-# built no-build-isolation against the system NVSHMEM / CCCL in `base`): apex /
-# TransformerEngine / flash-attn and megatron-bridge come prebuilt from the
-# wheelhouse, vllm / sglang / sglang-kernel from PyPI.
+# uv.lock. The only native compiles left are the git-sourced megatron-core /
+# mbridge and fast-hadamard-transform (built no-build-isolation against the
+# CCCL headers in `base`): apex / TransformerEngine / flash-attn / deep-ep /
+# flash-mla and megatron-bridge come prebuilt from the wheelhouse, vllm /
+# sglang / sglang-kernel from PyPI.
 # The `cu130 dev` scope keeps this image to its torch-2.11 world. (The deferred
 # cu12.9 / torch-2.9.1 world is commented out in pyproject.toml.) It passes
 # --no-install-project, so only deps are cached and this
