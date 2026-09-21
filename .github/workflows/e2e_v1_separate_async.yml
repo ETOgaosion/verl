@@ -108,7 +108,9 @@ jobs:
         run: |
           $UV_RUN uv pip list
       - name: Prepare GSM8K dataset
-        run: $UV_RUN python3 examples/data_preprocess/gsm8k.py --local_dataset_path ${HOME}/models/hf_data/gsm8k
+        run: |
+          $UV_RUN python3 examples/data_preprocess/gsm8k.py --local_dataset_path ${HOME}/models/hf_data/gsm8k
+          echo "$UV_RUN python3 examples/data_preprocess/gsm8k.py --local_dataset_path ${HOME}/models/hf_data/gsm8k"
       - name: Run V1 separate_async with FSDP2
         run: |
           $UV_RUN ray stop --force
